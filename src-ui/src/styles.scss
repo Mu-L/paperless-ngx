@@ -1,19 +1,83 @@
-// bs options
-$enable-negative-margins: true;
+@use "sass:meta";
+// bs variables
+$grid-gutter-width: 1.5rem;
+$border-radius: .375rem;
+$btn-border-width: var(--bs-border-width);
 
-@import "theme";
-@import "node_modules/bootstrap/scss/bootstrap";
+$form-file-button-bg: var(--bs-body-bg);
+$form-file-button-hover-bg: var(--pngx-bg-alt);
+
+@import "node_modules/bootstrap/dist/css/bootstrap.css";
+@include meta.load-css("theme");
 @import "~@ng-select/ng-select/themes/default.theme.css";
-@import "print";
+@include meta.load-css("print");
+
+// re-created bootstrap styles
+.mt-n2 {
+  margin-top: -0.5rem;
+}
+.me-n2 {
+  margin-right: -0.5rem;
+}
+.me-n3 {
+  margin-right: -1rem;
+}
+.mb-n2 {
+  margin-bottom: -0.5rem;
+}
+.ms-n1 {
+  margin-left: -0.25rem;
+}
+.ms-n2 {
+  margin-left: -0.5rem;
+}
+.my-n2 {
+  margin-top: -0.5rem;
+  margin-bottom: -0.5rem;
+}
+
+$grid-breakpoints: (
+  xs: 0,
+  sm: 576px,
+  md: 768px,
+  lg: 992px,
+  xl: 1200px,
+  xxl: 1400px,
+  xxxl: 2400px
+);
+
+:root {
+  @each $name, $value in $grid-breakpoints {
+    --bs-breakpoint-#{$name}: #{$value};
+  }
+}
+
+@media (min-width: 2400px) {
+  .col-xxxl-1 {
+    flex: 0 0 auto;
+    width: 8.33333333%;
+  }
+  .col-xxxl-11 {
+    flex: 0 0 auto;
+    width:91.66666667%
+  }
+}
 
 // Paperless-ngx styles
 body {
-  font-size: 0.875rem;
+  --pngx-body-font-size: 0.875rem;
+  font-size: var(--pngx-body-font-size);
   height: 100vh;
 }
 
 * {
   transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+@media(min-width: 768px) {
+  .col-slim {
+    padding-left: calc(50px + $grid-gutter-width) !important;
+  }
 }
 
 svg.logo {
@@ -50,6 +114,11 @@ svg.logo {
   color: var(--bs-body-color);
 }
 
+.list-group-item .btn-link,
+table .btn-link {
+  font-size: 1em;
+}
+
 .bg-body {
   background-color: var(--bs-body-bg);
 }
@@ -63,7 +132,7 @@ svg.logo {
   color: var(--pngx-primary-text-contrast) !important;
 }
 
-.navbar .dropdown .btn {
+.navbar .dropdown > .btn {
   color: var(--pngx-primary-text-contrast) !important;
 }
 
@@ -113,10 +182,6 @@ svg.logo {
   &:hover {
     color: var(--bs-light);
   }
-}
-
-.nav-item .sidebaricon {
-  color: var(--bs-secondary);
 }
 
 .btn:focus,
@@ -169,9 +234,16 @@ a, a:hover,
   color: var(--bs-primary);
 }
 
+a.btn-link:hover,
+a.btn-link:active,
+a.btn-link:focus-visible,
 .btn-link:hover,
-.btn-link:active {
-  color: var(--pngx-primary-darken-15) !important;
+.btn-link:active,
+.btn-link:focus-visible {
+  color: var(--pngx-primary-lighten-10) !important;
+  .primary-light & {
+    color: var(--pngx-primary-darken-15) !important;
+  }
 }
 
 .form-control-dark {
@@ -223,11 +295,19 @@ a, a:hover,
     position: relative;
     flex: 1 1 auto;
     margin-bottom: 0;
-    min-height: calc(1.5em + 0.75rem + 5px);
+    min-height: calc(1em + 0.75rem + 5px);
     line-height: 1.5;
+
+    .ng-select-container {
+      border-radius: $border-radius;
+    }
 
     .ng-select-container .ng-value-container .ng-input {
       top: 7px;
+
+      input {
+        min-width: 10px;
+      }
     }
 
     .ng-dropdown-panel .ng-dropdown-panel-items .ng-option.ng-option-marked {
@@ -237,7 +317,13 @@ a, a:hover,
 
     .ng-dropdown-panel .ng-dropdown-panel-items .ng-option.ng-option-selected,
     .ng-dropdown-panel .ng-dropdown-panel-items .ng-option.ng-option-selected.ng-option-marked {
-      background: none;
+      font-weight: bold;
+      background-color: var(--pngx-bg-alt2) !important;
+    }
+
+    &.ng-select-multiple .ng-select-container .ng-value-container .ng-placeholder,
+    .ng-select-container .ng-value-container .ng-placeholder {
+      top: 7px;
     }
   }
 
@@ -255,6 +341,7 @@ a, a:hover,
 .paperless-input-tags {
   .ng-select.ng-select-multiple .ng-select-container .ng-value-container .ng-value {
     background-color: transparent;
+    border-color: transparent;
   }
 
   .ng-select.ng-select-multiple .ng-select-container .ng-value-container {
@@ -282,11 +369,35 @@ textarea,
   color: var(--bs-body-color);
   background-color: var(--bs-body-bg);
   border-color: var(--bs-border-color);
+  font-size: 0.875rem;
 
   &:focus {
     background-color: var(--pngx-bg-darker);
     color: var(--bs-body-color);
   }
+
+  @media(max-width: 768px) {
+    font-size: 1rem;
+  }
+}
+
+@media(max-width: 768px) {
+  .input-group-sm .btn-sm {
+    // accommodate larger font size on mobile
+    padding-top: .35rem;
+    padding-bottom: .35rem;
+  }
+}
+
+.input-group .form-control-sm {
+  // accommodate larger font size on mobile
+  padding-top: .15rem;
+  padding-bottom: .15rem;
+  min-height: calc(1.3em + 0.5rem + calc(var(--bs-border-width) * 2)) !important;
+}
+
+.input-group .btn-outline-secondary {
+  border-color: var(--bs-border-color);
 }
 
 .form-check-input:checked {
@@ -299,8 +410,16 @@ textarea,
 }
 
 .form-control:disabled, .form-control[readonly] {
-  background-color: var(--pngx-bg-alt);
+  background-color: var(--pngx-bg-disabled);
   cursor: not-allowed;
+}
+
+.cursor-pointer {
+  cursor: pointer;
+}
+
+ul.pagination {
+  margin-bottom: 0;
 }
 
 .page-link {
@@ -316,7 +435,6 @@ textarea,
 
 .page-item.active .page-link {
   background-color: var(--bs-primary);
-  border-color: var(--bs-primary) !important;
   color: var(--bs-light);
 }
 
@@ -343,6 +461,14 @@ textarea,
 
     &.active:focus, &:active {
       border-bottom: 1px solid transparent;
+    }
+  }
+}
+
+.nav-underline {
+  .nav-link {
+    &.active, &:hover, &:focus {
+      color: var(--bs-primary);
     }
   }
 }
@@ -408,35 +534,28 @@ textarea,
 
 .doc-img-container {
   border: none !important;
-  border-top-left-radius: .25rem;
-  border-top-right-radius: .25rem;
   overflow: hidden;
+
+  .doc-img {
+    overflow: visible;
+  }
 }
 
-// icons
-.toolbaricon {
-  width: 1.2em;
-  height: 1.2em;
-}
+.card-selected {
+  border-color:var(--bs-primary);
 
-.buttonicon {
-  width: 1.2em;
-  height: 1.2em;
-}
+  .document-card-check {
+    display: block !important;
+  }
 
-.sidebaricon {
-  width: 16px;
-  height: 16px;
-  vertical-align: text-bottom;
-}
-
-.sidebaricon-sm {
-  width: 12px;
-  height: 12px;
+  .doc-img-container {
+    background-color: var(--pngx-primary-faded);
+  }
 }
 
 table.table {
-  color: var(--bs-body-color);
+  --bs-table-color: var(--bs-body-color);
+  --bs-table-bg: var(--bs-light-rgb);
 
   .des,.asc {
     background-color: var(--bs-body-bg) !important;
@@ -449,50 +568,6 @@ table.table {
 
 .modal .btn-close {
   color: var(--bs-body-color);
-}
-
-.main-dropzone {
-  height: 100%;
-  width: 100%;
-
-  &.ngx-file-drop__drop-zone--over {
-    background-color: transparent !important;
-  }
-}
-
-.global-dropzone-overlay {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  background-color: hsla(var(--pngx-primary), var(--pngx-primary-lightness), .8);
-  z-index: 1055; // $zindex-modal
-  pointer-events: none !important;
-  user-select: none !important;
-  text-align: center;
-  padding-top: 25%;
-
-  h2 {
-    color: var(--pngx-primary-text-contrast)
-  }
-
-  &.show {
-    opacity: 1 !important;
-  }
-
-  &.hide {
-    display: none;
-  }
-}
-
-.ngx-file-drop__drop-zone--over .global-dropzone-overlay {
-  opacity: 0;
-}
-
-.inert {
-  pointer-events: none !important;
-  user-select: none !important;
 }
 
 .alert-primary {
@@ -542,6 +617,17 @@ table.table {
 body.tour-active .row.sticky-top,
 body.tour-active .sidebar {
   z-index: inherit !important;
+}
+
+.tour-step {
+  .popover-header {
+    --bs-popover-header-padding-y: .75rem;
+  }
+
+  .popover-body {
+    // reset ngx-ui-tour overrides
+    padding: var(--bs-popover-body-padding-y) var(--bs-popover-body-padding-x) !important;
+  }
 }
 
 .nav-item.touranchor--is-active a {
@@ -606,4 +692,104 @@ a.badge {
 
 code {
   color: var(--pngx-body-color-accent)
+}
+
+.accordion {
+  --bs-accordion-btn-bg: var(--bs-light);
+  --bs-accordion-btn-color: var(--bs-primary);
+  --bs-accordion-color: var(--bs-body-color);
+  --bs-accordion-bg: var(--bs-light);
+  --bs-accordion-active-color: var(--bs-primary);
+  --bs-accordion-active-bg: var(--pngx-bg-alt);
+}
+
+.accordion-button::after {
+  filter: invert(0.5) saturate(0);
+}
+
+.accordion-button {
+  font-size: var(--pngx-body-font-size);
+}
+
+.me-1px {
+  margin-right: 1px !important;
+}
+
+.cdk-drag-placeholder {
+  opacity: .5;
+}
+
+.whitespace-preserve {
+  white-space: preserve;
+}
+
+/* Animate items as they're being sorted. */
+.cdk-drop-list-dragging .cdk-drag {
+  transition: transform 250ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+/* Animate an item that has been dropped. */
+.cdk-drag-animating {
+  transition: transform 300ms cubic-bezier(0, 0, 0.2, 1);
+}
+
+.hidden-button-container {
+  button {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+  }
+  &:hover {
+    button {
+      opacity: 1;
+      pointer-events: initial;
+    }
+  }
+}
+
+// pdfjs
+canvas.hiddenCanvasElement {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  z-index: -1;
+  height: 0;
+  width: 0;
+}
+
+// bs icons
+.btn-sm i-bs svg {
+  vertical-align: text-bottom;
+}
+
+.document-card {
+  .card-footer i-bs svg {
+    vertical-align: middle;
+  }
+}
+
+// fixes for buttons in preview popup
+.btn-group pngx-preview-popup:not(:last-child) {
+  // Prevent double borders when buttons are next to each other
+  > .btn {
+    margin-left: calc(#{$btn-border-width} * -1);
+  }
+  > .btn {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+.btn-group pngx-preview-popup:not(:first-child) {
+  > .btn {
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+}
+.btn-group pngx-preview-popup {
+  position: relative;
+  flex: 1 1 auto;
+
+  > .btn {
+    display: block;
+  }
 }

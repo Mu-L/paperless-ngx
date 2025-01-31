@@ -2,13 +2,15 @@ import textwrap
 from unittest import mock
 
 from django.core.checks import Error
-from django.test import override_settings
+from django.core.checks import Warning
 from django.test import TestCase
+from django.test import override_settings
+
 from documents.checks import changed_password_check
+from documents.checks import filename_format_check
 from documents.checks import parser_check
 from documents.models import Document
-
-from .factories import DocumentFactory
+from documents.tests.factories import DocumentFactory
 
 
 class TestDocumentChecks(TestCase):
@@ -35,7 +37,6 @@ class TestDocumentChecks(TestCase):
     @mock.patch("paperless.db.GnuPG.decrypted")
     @mock.patch("documents.models.Document.source_file")
     def test_encrypted_decrypt_fails(self, mock_decrypted, mock_source_file):
-
         mock_decrypted.return_value = None
         mock_source_file.return_value = b""
 
@@ -60,7 +61,6 @@ class TestDocumentChecks(TestCase):
         )
 
     def test_parser_check(self):
-
         self.assertEqual(parser_check(None), [])
 
         with mock.patch("documents.checks.document_consumer_declaration.send") as m:
@@ -72,6 +72,20 @@ class TestDocumentChecks(TestCase):
                     Error(
                         "No parsers found. This is a bug. The consumer won't be "
                         "able to consume any documents without parsers.",
+                    ),
+                ],
+            )
+
+    def test_filename_format_check(self):
+        self.assertEqual(filename_format_check(None), [])
+
+        with override_settings(FILENAME_FORMAT="{created}/{title}"):
+            self.assertEqual(
+                filename_format_check(None),
+                [
+                    Warning(
+                        "Filename format {created}/{title} is using the old style, please update to use double curly brackets",
+                        hint="{{ created }}/{{ title }}",
                     ),
                 ],
             )
