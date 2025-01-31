@@ -1,3 +1,4 @@
+import { AsyncPipe, NgClass, NgTemplateOutlet } from '@angular/common'
 import {
   Component,
   OnDestroy,
@@ -6,45 +7,105 @@ import {
   ViewChild,
   ViewChildren,
 } from '@angular/core'
-import { ActivatedRoute, convertToParamMap, Router } from '@angular/router'
-import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
-import { filter, first, map, Subject, switchMap, takeUntil } from 'rxjs'
-import { FilterRule } from 'src/app/data/filter-rule'
+import { FormsModule, ReactiveFormsModule } from '@angular/forms'
 import {
-  filterRulesDiffer,
-  isFullTextFilterRule,
-} from 'src/app/utils/filter-rules'
+  ActivatedRoute,
+  convertToParamMap,
+  Router,
+  RouterModule,
+} from '@angular/router'
+import {
+  NgbDropdownModule,
+  NgbModal,
+  NgbPaginationModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { TourNgBootstrapModule } from 'ngx-ui-tour-ng-bootstrap'
+import { filter, first, map, Subject, switchMap, takeUntil } from 'rxjs'
+import {
+  DEFAULT_DISPLAY_FIELDS,
+  DisplayField,
+  DisplayMode,
+  Document,
+} from 'src/app/data/document'
+import { FilterRule } from 'src/app/data/filter-rule'
 import { FILTER_FULLTEXT_MORELIKE } from 'src/app/data/filter-rule-type'
-import { PaperlessDocument } from 'src/app/data/paperless-document'
-import { PaperlessSavedView } from 'src/app/data/paperless-saved-view'
-import { SETTINGS_KEYS } from 'src/app/data/paperless-uisettings'
+import { SavedView } from 'src/app/data/saved-view'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
 import {
   SortableDirective,
   SortEvent,
 } from 'src/app/directives/sortable.directive'
+import { CorrespondentNamePipe } from 'src/app/pipes/correspondent-name.pipe'
+import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
+import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
+import { DocumentTypeNamePipe } from 'src/app/pipes/document-type-name.pipe'
+import { StoragePathNamePipe } from 'src/app/pipes/storage-path-name.pipe'
+import { UsernamePipe } from 'src/app/pipes/username.pipe'
 import { ConsumerStatusService } from 'src/app/services/consumer-status.service'
 import { DocumentListViewService } from 'src/app/services/document-list-view.service'
+import { HotKeyService } from 'src/app/services/hot-key.service'
 import { OpenDocumentsService } from 'src/app/services/open-documents.service'
-import {
-  DOCUMENT_SORT_FIELDS,
-  DOCUMENT_SORT_FIELDS_FULLTEXT,
-} from 'src/app/services/rest/document.service'
+import { PermissionsService } from 'src/app/services/permissions.service'
 import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { SettingsService } from 'src/app/services/settings.service'
 import { ToastService } from 'src/app/services/toast.service'
+import {
+  filterRulesDiffer,
+  isFullTextFilterRule,
+} from 'src/app/utils/filter-rules'
+import { CustomFieldDisplayComponent } from '../common/custom-field-display/custom-field-display.component'
+import { PageHeaderComponent } from '../common/page-header/page-header.component'
+import { PreviewPopupComponent } from '../common/preview-popup/preview-popup.component'
+import { TagComponent } from '../common/tag/tag.component'
 import { ComponentWithPermissions } from '../with-permissions/with-permissions.component'
+import { BulkEditorComponent } from './bulk-editor/bulk-editor.component'
+import { DocumentCardLargeComponent } from './document-card-large/document-card-large.component'
+import { DocumentCardSmallComponent } from './document-card-small/document-card-small.component'
 import { FilterEditorComponent } from './filter-editor/filter-editor.component'
 import { SaveViewConfigDialogComponent } from './save-view-config-dialog/save-view-config-dialog.component'
 
 @Component({
-  selector: 'app-document-list',
+  selector: 'pngx-document-list',
   templateUrl: './document-list.component.html',
   styleUrls: ['./document-list.component.scss'],
+  imports: [
+    CustomFieldDisplayComponent,
+    PageHeaderComponent,
+    BulkEditorComponent,
+    FilterEditorComponent,
+    DocumentCardSmallComponent,
+    DocumentCardLargeComponent,
+    PreviewPopupComponent,
+    TagComponent,
+    CustomDatePipe,
+    DocumentTitlePipe,
+    IfPermissionsDirective,
+    SortableDirective,
+    UsernamePipe,
+    CorrespondentNamePipe,
+    DocumentTypeNamePipe,
+    StoragePathNamePipe,
+    NgxBootstrapIconsModule,
+    AsyncPipe,
+    FormsModule,
+    ReactiveFormsModule,
+    NgTemplateOutlet,
+    NgbDropdownModule,
+    NgbPaginationModule,
+    NgClass,
+    RouterModule,
+    TourNgBootstrapModule,
+  ],
 })
 export class DocumentListComponent
   extends ComponentWithPermissions
   implements OnInit, OnDestroy
 {
+  DisplayField = DisplayField
+  DisplayMode = DisplayMode
+
   constructor(
     public list: DocumentListViewService,
     public savedViewService: SavedViewService,
@@ -54,7 +115,9 @@ export class DocumentListComponent
     private modalService: NgbModal,
     private consumerStatusService: ConsumerStatusService,
     public openDocumentsService: OpenDocumentsService,
-    private settingsService: SettingsService
+    public settingsService: SettingsService,
+    private hotKeyService: HotKeyService,
+    public permissionService: PermissionsService
   ) {
     super()
   }
@@ -64,10 +127,28 @@ export class DocumentListComponent
 
   @ViewChildren(SortableDirective) headers: QueryList<SortableDirective>
 
-  displayMode = 'smallCards' // largeCards, smallCards, details
+  get activeDisplayFields(): DisplayField[] {
+    return this.list.displayFields
+  }
+
+  set activeDisplayFields(fields: DisplayField[]) {
+    this.list.displayFields = fields
+    this.updateDisplayCustomFields()
+  }
+  activeDisplayCustomFields: Set<string> = new Set()
+
+  public updateDisplayCustomFields() {
+    this.activeDisplayCustomFields = new Set(
+      Array.from(this.activeDisplayFields).filter(
+        (field) =>
+          typeof field === 'string' &&
+          field.startsWith(DisplayField.CUSTOM_FIELD)
+      )
+    )
+  }
 
   unmodifiedFilterRules: FilterRule[] = []
-  private unmodifiedSavedView: PaperlessSavedView
+  private unmodifiedSavedView: SavedView
 
   private unsubscribeNotifier: Subject<any> = new Subject()
 
@@ -77,6 +158,21 @@ export class DocumentListComponent
       return (
         this.unmodifiedSavedView.sort_field !== this.list.sortField ||
         this.unmodifiedSavedView.sort_reverse !== this.list.sortReverse ||
+        (this.unmodifiedSavedView.page_size &&
+          this.unmodifiedSavedView.page_size !== this.list.pageSize) ||
+        (this.unmodifiedSavedView.display_mode &&
+          this.unmodifiedSavedView.display_mode !== this.list.displayMode) ||
+        // if the saved view has no display mode, we assume it's small cards
+        (!this.unmodifiedSavedView.display_mode &&
+          this.list.displayMode !== DisplayMode.SMALL_CARDS) ||
+        (this.unmodifiedSavedView.display_fields &&
+          this.unmodifiedSavedView.display_fields.join(',') !==
+            this.activeDisplayFields.join(',')) ||
+        (!this.unmodifiedSavedView.display_fields &&
+          this.activeDisplayFields.join(',') !==
+            DEFAULT_DISPLAY_FIELDS.filter((f) => f.id !== DisplayField.ADDED)
+              .map((f) => f.id)
+              .join(',')) ||
         filterRulesDiffer(
           this.unmodifiedSavedView.filter_rules,
           this.list.filterRules
@@ -86,7 +182,7 @@ export class DocumentListComponent
   }
 
   get isFiltered() {
-    return this.list.filterRules?.length > 0
+    return !!this.filterEditor?.rulesModified
   }
 
   getTitle() {
@@ -101,8 +197,8 @@ export class DocumentListComponent
 
   getSortFields() {
     return isFullTextFilterRule(this.list.filterRules)
-      ? DOCUMENT_SORT_FIELDS_FULLTEXT
-      : DOCUMENT_SORT_FIELDS
+      ? this.list.sortFieldsFullText
+      : this.list.sortFields
   }
 
   set listSortReverse(reverse: boolean) {
@@ -113,10 +209,6 @@ export class DocumentListComponent
     return this.list.sortReverse
   }
 
-  setSortField(field: string) {
-    this.list.sortField = field
-  }
-
   onSort(event: SortEvent) {
     this.list.setSort(event.column, event.reverse)
   }
@@ -125,15 +217,23 @@ export class DocumentListComponent
     return this.list.selected.size > 0
   }
 
-  saveDisplayMode() {
-    localStorage.setItem('document-list:displayMode', this.displayMode)
+  toggleDisplayField(field: DisplayField) {
+    if (this.activeDisplayFields.includes(field)) {
+      this.activeDisplayFields = this.activeDisplayFields.filter(
+        (f) => f !== field
+      )
+    } else {
+      this.activeDisplayFields = [...this.activeDisplayFields, field]
+    }
+    this.updateDisplayCustomFields()
+  }
+
+  public getDisplayCustomFieldTitle(field: string) {
+    return this.settingsService.allDisplayFields.find((f) => f.id === field)
+      ?.name
   }
 
   ngOnInit(): void {
-    if (localStorage.getItem('document-list:displayMode') != null) {
-      this.displayMode = localStorage.getItem('document-list:displayMode')
-    }
-
     this.consumerStatusService
       .onDocumentConsumptionFinished()
       .pipe(takeUntil(this.unsubscribeNotifier))
@@ -153,7 +253,9 @@ export class DocumentListComponent
       .pipe(takeUntil(this.unsubscribeNotifier))
       .subscribe(({ view }) => {
         if (!view) {
-          this.router.navigate(['404'])
+          this.router.navigate(['404'], {
+            replaceUrl: true,
+          })
           return
         }
         this.unmodifiedSavedView = view
@@ -162,6 +264,7 @@ export class DocumentListComponent
           convertToParamMap(this.route.snapshot.queryParams)
         )
         this.list.reload()
+        this.updateDisplayCustomFields()
         this.unmodifiedFilterRules = view.filter_rules
       })
 
@@ -171,6 +274,7 @@ export class DocumentListComponent
         takeUntil(this.unsubscribeNotifier)
       )
       .subscribe((queryParams) => {
+        this.updateDisplayCustomFields()
         if (queryParams.has('view')) {
           // loading a saved view on /documents
           this.loadViewConfig(parseInt(queryParams.get('view')))
@@ -180,21 +284,91 @@ export class DocumentListComponent
           this.unmodifiedFilterRules = []
         }
       })
+
+    this.hotKeyService
+      .addShortcut({
+        keys: 'escape',
+        description: $localize`Reset filters / selection`,
+      })
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        if (this.list.selected.size > 0) {
+          this.list.selectNone()
+        } else if (this.isFiltered) {
+          this.filterEditor.resetSelected()
+        }
+      })
+
+    this.hotKeyService
+      .addShortcut({ keys: 'a', description: $localize`Select all` })
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        this.list.selectAll()
+      })
+
+    this.hotKeyService
+      .addShortcut({ keys: 'p', description: $localize`Select page` })
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        this.list.selectPage()
+      })
+
+    this.hotKeyService
+      .addShortcut({
+        keys: 'o',
+        description: $localize`Open first [selected] document`,
+      })
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        if (this.list.documents.length > 0) {
+          if (this.list.selected.size > 0) {
+            this.openDocumentDetail(Array.from(this.list.selected)[0])
+          } else {
+            this.openDocumentDetail(this.list.documents[0])
+          }
+        }
+      })
+
+    this.hotKeyService
+      .addShortcut({
+        keys: 'control.arrowleft',
+        description: $localize`Previous page`,
+      })
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        if (this.list.currentPage > 1) {
+          this.list.currentPage--
+        }
+      })
+
+    this.hotKeyService
+      .addShortcut({
+        keys: 'control.arrowright',
+        description: $localize`Next page`,
+      })
+      .pipe(takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => {
+        if (this.list.currentPage < this.list.getLastPage()) {
+          this.list.currentPage++
+        }
+      })
   }
 
   ngOnDestroy() {
-    // unsubscribes all
+    this.list.cancelPending()
     this.unsubscribeNotifier.next(this)
     this.unsubscribeNotifier.complete()
   }
 
   saveViewConfig() {
     if (this.list.activeSavedViewId != null) {
-      let savedView: PaperlessSavedView = {
+      let savedView: SavedView = {
         id: this.list.activeSavedViewId,
         filter_rules: this.list.filterRules,
         sort_field: this.list.sortField,
         sort_reverse: this.list.sortReverse,
+        display_mode: this.list.displayMode,
+        display_fields: this.activeDisplayFields,
       }
       this.savedViewService
         .patch(savedView)
@@ -227,13 +401,15 @@ export class DocumentListComponent
     modal.componentInstance.defaultName = this.filterEditor.generateFilterName()
     modal.componentInstance.saveClicked.pipe(first()).subscribe((formValue) => {
       modal.componentInstance.buttonsEnabled = false
-      let savedView: PaperlessSavedView = {
+      let savedView: SavedView = {
         name: formValue.name,
         show_on_dashboard: formValue.showOnDashboard,
         show_in_sidebar: formValue.showInSideBar,
         filter_rules: this.list.filterRules,
         sort_reverse: this.list.sortReverse,
         sort_field: this.list.sortField,
+        display_mode: this.list.displayMode,
+        display_fields: this.activeDisplayFields,
       }
 
       this.savedViewService
@@ -258,11 +434,14 @@ export class DocumentListComponent
     })
   }
 
-  openDocumentDetail(document: PaperlessDocument) {
-    this.router.navigate(['documents', document.id])
+  openDocumentDetail(document: Document | number) {
+    this.router.navigate([
+      'documents',
+      typeof document === 'number' ? document : document.id,
+    ])
   }
 
-  toggleSelected(document: PaperlessDocument, event: MouseEvent): void {
+  toggleSelected(document: Document, event: MouseEvent): void {
     if (!event.shiftKey) this.list.toggleSelected(document)
     else this.list.selectRangeTo(document)
   }
@@ -291,10 +470,6 @@ export class DocumentListComponent
     this.list.quickFilter([
       { rule_type: FILTER_FULLTEXT_MORELIKE, value: documentID.toString() },
     ])
-  }
-
-  trackByDocumentId(index, item: PaperlessDocument) {
-    return item.id
   }
 
   get notesEnabled(): boolean {

@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core'
 import { ObjectWithPermissions } from '../data/object-with-permissions'
-import { PaperlessUser } from '../data/paperless-user'
+import { User } from '../data/user'
 
 export enum PermissionAction {
   Add = 'add',
@@ -17,13 +17,17 @@ export enum PermissionType {
   StoragePath = '%s_storagepath',
   SavedView = '%s_savedview',
   PaperlessTask = '%s_paperlesstask',
+  AppConfig = '%s_applicationconfiguration',
   UISettings = '%s_uisettings',
+  History = '%s_logentry',
   Note = '%s_note',
   MailAccount = '%s_mailaccount',
   MailRule = '%s_mailrule',
   User = '%s_user',
   Group = '%s_group',
-  Admin = '%s_logentry',
+  ShareLink = '%s_sharelink',
+  CustomField = '%s_customfield',
+  Workflow = '%s_workflow',
 }
 
 @Injectable({
@@ -31,9 +35,9 @@ export enum PermissionType {
 })
 export class PermissionsService {
   private permissions: string[]
-  private currentUser: PaperlessUser
+  private currentUser: User
 
-  public initialize(permissions: string[], currentUser: PaperlessUser) {
+  public initialize(permissions: string[], currentUser: User) {
     this.permissions = permissions
     this.currentUser = currentUser
   }
@@ -46,6 +50,14 @@ export class PermissionsService {
       this.currentUser?.is_superuser ||
       this.permissions?.includes(this.getPermissionCode(action, type))
     )
+  }
+
+  public isAdmin(): boolean {
+    return this.currentUser?.is_staff
+  }
+
+  public isSuperUser(): boolean {
+    return this.currentUser?.is_superuser
   }
 
   public currentUserOwnsObject(object: ObjectWithPermissions): boolean {

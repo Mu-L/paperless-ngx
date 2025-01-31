@@ -9,11 +9,13 @@ import {
 } from 'src/app/data/matching-model'
 import { ObjectWithId } from 'src/app/data/object-with-id'
 import { ObjectWithPermissions } from 'src/app/data/object-with-permissions'
-import { PaperlessUser } from 'src/app/data/paperless-user'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { User } from 'src/app/data/user'
 import { AbstractPaperlessService } from 'src/app/services/rest/abstract-paperless-service'
 import { UserService } from 'src/app/services/rest/user.service'
-import { PermissionsFormObject } from '../input/permissions/permissions-form/permissions-form.component'
 import { SettingsService } from 'src/app/services/settings.service'
+import { LoadingComponentWithPermissions } from '../../loading-component/loading.component'
+import { PermissionsFormObject } from '../input/permissions/permissions-form/permissions-form.component'
 
 export enum EditDialogMode {
   CREATE = 0,
@@ -22,17 +24,21 @@ export enum EditDialogMode {
 
 @Directive()
 export abstract class EditDialogComponent<
-  T extends ObjectWithPermissions | ObjectWithId
-> implements OnInit
+    T extends ObjectWithPermissions | ObjectWithId,
+  >
+  extends LoadingComponentWithPermissions
+  implements OnInit
 {
   constructor(
     protected service: AbstractPaperlessService<T>,
     private activeModal: NgbActiveModal,
     private userService: UserService,
-    private settingsService: SettingsService
-  ) {}
+    protected settingsService: SettingsService
+  ) {
+    super()
+  }
 
-  users: PaperlessUser[]
+  users: User[]
 
   @Input()
   dialogMode: EditDialogMode = EditDialogMode.CREATE
@@ -57,8 +63,8 @@ export abstract class EditDialogComponent<
   objectForm: FormGroup = this.getForm()
 
   ngOnInit(): void {
-    if (this.object != null) {
-      if (this.object['permissions']) {
+    if (this.object != null && this.dialogMode !== EditDialogMode.CREATE) {
+      if ((this.object as ObjectWithPermissions).permissions) {
         this.object['set_permissions'] = this.object['permissions']
       }
 
@@ -67,20 +73,42 @@ export abstract class EditDialogComponent<
         set_permissions: (this.object as ObjectWithPermissions).permissions,
       }
       this.objectForm.patchValue(this.object)
+    } else {
+      // e.g. if name was set
+      this.objectForm.patchValue(this.object)
+      // defaults from settings
+      this.objectForm.patchValue({
+        permissions_form: {
+          owner: this.settingsService.get(SETTINGS_KEYS.DEFAULT_PERMS_OWNER),
+          set_permissions: {
+            view: {
+              users: this.settingsService.get(
+                SETTINGS_KEYS.DEFAULT_PERMS_VIEW_USERS
+              ),
+              groups: this.settingsService.get(
+                SETTINGS_KEYS.DEFAULT_PERMS_VIEW_GROUPS
+              ),
+            },
+            change: {
+              users: this.settingsService.get(
+                SETTINGS_KEYS.DEFAULT_PERMS_EDIT_USERS
+              ),
+              groups: this.settingsService.get(
+                SETTINGS_KEYS.DEFAULT_PERMS_EDIT_GROUPS
+              ),
+            },
+          },
+        },
+      })
     }
 
-    // wait to enable close button so it doesnt steal focus from input since its the first clickable element in the DOM
+    // wait to enable close button so it doesn't steal focus from input since its the first clickable element in the DOM
     setTimeout(() => {
       this.closeEnabled = true
     })
 
     this.userService.listAll().subscribe((r) => {
       this.users = r.results
-      if (this.dialogMode === EditDialogMode.CREATE) {
-        this.objectForm.get('permissions_form')?.setValue({
-          owner: this.settingsService.currentUser.id,
-        })
-      }
     })
   }
 

@@ -1,30 +1,30 @@
 import { TestBed } from '@angular/core/testing'
+import { Document } from '../data/document'
 import {
   PermissionAction,
   PermissionType,
   PermissionsService,
 } from './permissions.service'
-import { PaperlessDocument } from '../data/paperless-document'
 
 describe('PermissionsService', () => {
   let permissionsService: PermissionsService
 
-  const docUnowned: PaperlessDocument = {
+  const docUnowned: Document = {
     title: 'Doc title',
     owner: null,
   }
 
-  const docOwned: PaperlessDocument = {
+  const docOwned: Document = {
     title: 'Doc title 2',
     owner: 1,
   }
 
-  const docNotOwned: PaperlessDocument = {
+  const docNotOwned: Document = {
     title: 'Doc title 3',
     owner: 2,
   }
 
-  const docUserViewGranted: PaperlessDocument = {
+  const docUserViewGranted: Document = {
     title: 'Doc title 4',
     owner: 2,
     permissions: {
@@ -39,7 +39,7 @@ describe('PermissionsService', () => {
     },
   }
 
-  const docUserEditGranted: PaperlessDocument = {
+  const docUserEditGranted: Document = {
     title: 'Doc title 5',
     owner: 2,
     permissions: {
@@ -54,7 +54,7 @@ describe('PermissionsService', () => {
     },
   }
 
-  const docGroupViewGranted: PaperlessDocument = {
+  const docGroupViewGranted: Document = {
     title: 'Doc title 4',
     owner: 2,
     permissions: {
@@ -69,7 +69,7 @@ describe('PermissionsService', () => {
     },
   }
 
-  const docGroupEditGranted: PaperlessDocument = {
+  const docGroupEditGranted: Document = {
     title: 'Doc title 5',
     owner: 2,
     permissions: {
@@ -248,6 +248,22 @@ describe('PermissionsService', () => {
         'view_log',
         'view_comment',
         'change_frontendsettings',
+        'add_sharelink',
+        'view_sharelink',
+        'change_sharelink',
+        'delete_sharelink',
+        'add_workflow',
+        'view_workflow',
+        'change_workflow',
+        'delete_workflow',
+        'add_customfield',
+        'view_customfield',
+        'change_customfield',
+        'delete_customfield',
+        'add_applicationconfiguration',
+        'change_applicationconfiguration',
+        'delete_applicationconfiguration',
+        'view_applicationconfiguration',
       ],
       {
         username: 'testuser',
@@ -401,5 +417,47 @@ describe('PermissionsService', () => {
         docGroupEditGranted
       )
     ).toBeTruthy()
+  })
+
+  it('correctly checks admin status', () => {
+    permissionsService.initialize([], {
+      username: 'testuser',
+      last_name: 'User',
+      first_name: 'Test',
+      id: 1,
+      is_staff: true,
+    })
+
+    expect(permissionsService.isAdmin()).toBeTruthy()
+
+    permissionsService.initialize([], {
+      username: 'testuser',
+      last_name: 'User',
+      first_name: 'Test',
+      id: 1,
+    })
+
+    expect(permissionsService.isAdmin()).toBeFalsy()
+  })
+
+  it('correctly checks superuser status', () => {
+    permissionsService.initialize([], {
+      username: 'testuser',
+      last_name: 'User',
+      first_name: 'Test',
+      id: 1,
+      is_superuser: true,
+    })
+
+    expect(permissionsService.isSuperUser()).toBeTruthy()
+
+    permissionsService.initialize([], {
+      username: 'testuser',
+      last_name: 'User',
+      first_name: 'Test',
+      id: 1,
+    })
+
+    expect(permissionsService.isSuperUser()).toBeFalsy()
   })
 })

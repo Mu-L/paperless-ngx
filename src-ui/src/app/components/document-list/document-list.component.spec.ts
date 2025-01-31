@@ -1,89 +1,77 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing'
-import { DocumentListComponent } from './document-list.component'
-import { HttpClientTestingModule } from '@angular/common/http/testing'
-import { RouterTestingModule } from '@angular/router/testing'
-import { routes } from 'src/app/app-routing.module'
-import { FilterEditorComponent } from './filter-editor/filter-editor.component'
-import { PermissionsFilterDropdownComponent } from '../common/permissions-filter-dropdown/permissions-filter-dropdown.component'
-import { DateDropdownComponent } from '../common/date-dropdown/date-dropdown.component'
-import { FilterableDropdownComponent } from '../common/filterable-dropdown/filterable-dropdown.component'
-import { PageHeaderComponent } from '../common/page-header/page-header.component'
-import { BulkEditorComponent } from './bulk-editor/bulk-editor.component'
-import { FilterPipe } from 'src/app/pipes/filter.pipe'
+import { DatePipe } from '@angular/common'
 import {
-  NgbDatepickerModule,
+  HttpErrorResponse,
+  provideHttpClient,
+  withInterceptorsFromDi,
+} from '@angular/common/http'
+import { provideHttpClientTesting } from '@angular/common/http/testing'
+import { ComponentFixture, TestBed } from '@angular/core/testing'
+import { By } from '@angular/platform-browser'
+import { ActivatedRoute, Router, convertToParamMap } from '@angular/router'
+import { RouterTestingModule } from '@angular/router/testing'
+import {
   NgbDropdown,
   NgbDropdownItem,
-  NgbDropdownModule,
   NgbModal,
   NgbModalRef,
-  NgbPagination,
-  NgbPopoverModule,
-  NgbTooltipModule,
 } from '@ng-bootstrap/ng-bootstrap'
-import { ClearableBadgeComponent } from '../common/clearable-badge/clearable-badge.component'
-import { FormsModule, ReactiveFormsModule } from '@angular/forms'
-import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
-import { ToggleableDropdownButtonComponent } from '../common/filterable-dropdown/toggleable-dropdown-button/toggleable-dropdown-button.component'
-import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
-import { DatePipe } from '@angular/common'
-import { DocumentListViewService } from 'src/app/services/document-list-view.service'
-import {
-  ConsumerStatusService,
-  FileStatus,
-} from 'src/app/services/consumer-status.service'
+import { NgxBootstrapIconsModule, allIcons } from 'ngx-bootstrap-icons'
 import { Subject, of, throwError } from 'rxjs'
-import { SavedViewService } from 'src/app/services/rest/saved-view.service'
-import { ActivatedRoute, Router, convertToParamMap } from '@angular/router'
-import { PaperlessSavedView } from 'src/app/data/paperless-saved-view'
+import { routes } from 'src/app/app-routing.module'
+import {
+  DEFAULT_DISPLAY_FIELDS,
+  DisplayField,
+  DisplayMode,
+  Document,
+} from 'src/app/data/document'
 import {
   FILTER_FULLTEXT_MORELIKE,
   FILTER_FULLTEXT_QUERY,
   FILTER_HAS_TAGS_ANY,
 } from 'src/app/data/filter-rule-type'
-import { By } from '@angular/platform-browser'
+import { SavedView } from 'src/app/data/saved-view'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
 import { SortableDirective } from 'src/app/directives/sortable.directive'
-import { ToastService } from 'src/app/services/toast.service'
-import { DocumentCardSmallComponent } from './document-card-small/document-card-small.component'
-import { DocumentCardLargeComponent } from './document-card-large/document-card-large.component'
-import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
-import { UsernamePipe } from 'src/app/pipes/username.pipe'
-import { PaperlessDocument } from 'src/app/data/paperless-document'
-import {
-  DOCUMENT_SORT_FIELDS,
-  DOCUMENT_SORT_FIELDS_FULLTEXT,
-  DocumentService,
-} from 'src/app/services/rest/document.service'
-import { ConfirmDialogComponent } from '../common/confirm-dialog/confirm-dialog.component'
-import { SafeHtmlPipe } from 'src/app/pipes/safehtml.pipe'
-import { SaveViewConfigDialogComponent } from './save-view-config-dialog/save-view-config-dialog.component'
-import { TextComponent } from '../common/input/text/text.component'
-import { CheckComponent } from '../common/input/check/check.component'
-import { HttpErrorResponse } from '@angular/common/http'
 import { PermissionsGuard } from 'src/app/guards/permissions.guard'
+import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
+import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
+import { FilterPipe } from 'src/app/pipes/filter.pipe'
+import { SafeHtmlPipe } from 'src/app/pipes/safehtml.pipe'
+import { UsernamePipe } from 'src/app/pipes/username.pipe'
+import {
+  ConsumerStatusService,
+  FileStatus,
+} from 'src/app/services/consumer-status.service'
+import { DocumentListViewService } from 'src/app/services/document-list-view.service'
+import { PermissionsService } from 'src/app/services/permissions.service'
+import { DocumentService } from 'src/app/services/rest/document.service'
+import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { SettingsService } from 'src/app/services/settings.service'
-import { SETTINGS_KEYS } from 'src/app/data/paperless-uisettings'
+import { ToastService } from 'src/app/services/toast.service'
+import { DocumentCardLargeComponent } from './document-card-large/document-card-large.component'
+import { DocumentCardSmallComponent } from './document-card-small/document-card-small.component'
+import { DocumentListComponent } from './document-list.component'
 
-const docs: PaperlessDocument[] = [
+const docs: Document[] = [
   {
     id: 1,
     title: 'Doc1',
     notes: [],
-    tags$: new Subject(),
+    tags: [],
     content: 'document content 1',
   },
   {
     id: 2,
     title: 'Doc2',
     notes: [],
-    tags$: new Subject(),
+    tags: [],
     content: 'document content 2',
   },
   {
     id: 3,
     title: 'Doc3',
     notes: [],
-    tags$: new Subject(),
+    tags: [],
     content: 'document content 3',
   },
 ]
@@ -100,32 +88,14 @@ describe('DocumentListComponent', () => {
   let toastService: ToastService
   let modalService: NgbModal
   let settingsService: SettingsService
+  let permissionService: PermissionsService
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [
+      imports: [
+        RouterTestingModule.withRoutes(routes),
+        NgxBootstrapIconsModule.pick(allIcons),
         DocumentListComponent,
-        PageHeaderComponent,
-        FilterEditorComponent,
-        FilterableDropdownComponent,
-        DateDropdownComponent,
-        PermissionsFilterDropdownComponent,
-        ToggleableDropdownButtonComponent,
-        BulkEditorComponent,
-        ClearableBadgeComponent,
-        DocumentCardSmallComponent,
-        DocumentCardLargeComponent,
-        ConfirmDialogComponent,
-        SaveViewConfigDialogComponent,
-        TextComponent,
-        CheckComponent,
-        IfPermissionsDirective,
-        FilterPipe,
-        CustomDatePipe,
-        SortableDirective,
-        DocumentTitlePipe,
-        UsernamePipe,
-        SafeHtmlPipe,
       ],
       providers: [
         FilterPipe,
@@ -135,16 +105,8 @@ describe('DocumentListComponent', () => {
         UsernamePipe,
         SafeHtmlPipe,
         PermissionsGuard,
-      ],
-      imports: [
-        HttpClientTestingModule,
-        RouterTestingModule.withRoutes(routes),
-        FormsModule,
-        ReactiveFormsModule,
-        NgbDropdownModule,
-        NgbDatepickerModule,
-        NgbPopoverModule,
-        NgbTooltipModule,
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
       ],
     }).compileComponents()
 
@@ -157,19 +119,9 @@ describe('DocumentListComponent', () => {
     toastService = TestBed.inject(ToastService)
     modalService = TestBed.inject(NgbModal)
     settingsService = TestBed.inject(SettingsService)
+    permissionService = TestBed.inject(PermissionsService)
     fixture = TestBed.createComponent(DocumentListComponent)
     component = fixture.componentInstance
-  })
-
-  it('should load display mode from local storage', () => {
-    window.localStorage.setItem('document-list:displayMode', 'largeCards')
-    fixture.detectChanges()
-    expect(component.displayMode).toEqual('largeCards')
-    component.displayMode = 'smallCards'
-    component.saveDisplayMode()
-    expect(window.localStorage.getItem('document-list:displayMode')).toEqual(
-      'smallCards'
-    )
   })
 
   it('should reload on new document consumed', () => {
@@ -191,7 +143,7 @@ describe('DocumentListComponent', () => {
       },
     ]
     fixture.detectChanges()
-    expect(component.getSortFields()).toEqual(DOCUMENT_SORT_FIELDS)
+    expect(component.getSortFields()).toEqual(documentListService.sortFields)
 
     documentListService.filterRules = [
       {
@@ -200,7 +152,9 @@ describe('DocumentListComponent', () => {
       },
     ]
     fixture.detectChanges()
-    expect(component.getSortFields()).toEqual(DOCUMENT_SORT_FIELDS_FULLTEXT)
+    expect(component.getSortFields()).toEqual(
+      documentListService.sortFieldsFullText
+    )
   })
 
   it('should determine if filtered, support reset', () => {
@@ -221,7 +175,7 @@ describe('DocumentListComponent', () => {
   })
 
   it('should load saved view from URL', () => {
-    const view: PaperlessSavedView = {
+    const view: SavedView = {
       id: 10,
       sort_field: 'added',
       sort_reverse: true,
@@ -259,11 +213,11 @@ describe('DocumentListComponent', () => {
       .mockReturnValue(of(convertToParamMap({ id: '10' })))
     const navigateSpy = jest.spyOn(router, 'navigate')
     fixture.detectChanges()
-    expect(navigateSpy).toHaveBeenCalledWith(['404'])
+    expect(navigateSpy).toHaveBeenCalledWith(['404'], { replaceUrl: true })
   })
 
   it('should load saved view from query params', () => {
-    const view: PaperlessSavedView = {
+    const view: SavedView = {
       id: 10,
       sort_field: 'added',
       sort_reverse: true,
@@ -289,18 +243,18 @@ describe('DocumentListComponent', () => {
     const displayModeButtons = fixture.debugElement.queryAll(
       By.css('input[type="radio"]')
     )
-    expect(component.displayMode).toEqual('smallCards')
+    expect(component.list.displayMode).toEqual('smallCards')
 
     displayModeButtons[0].nativeElement.checked = true
     displayModeButtons[0].triggerEventHandler('change')
     fixture.detectChanges()
-    expect(component.displayMode).toEqual('details')
-    expect(fixture.debugElement.queryAll(By.css('tr'))).toHaveLength(3)
+    expect(component.list.displayMode).toEqual('table')
+    expect(fixture.debugElement.queryAll(By.css('tr'))).toHaveLength(4)
 
     displayModeButtons[1].nativeElement.checked = true
     displayModeButtons[1].triggerEventHandler('change')
     fixture.detectChanges()
-    expect(component.displayMode).toEqual('smallCards')
+    expect(component.list.displayMode).toEqual('smallCards')
     expect(
       fixture.debugElement.queryAll(By.directive(DocumentCardSmallComponent))
     ).toHaveLength(3)
@@ -308,7 +262,7 @@ describe('DocumentListComponent', () => {
     displayModeButtons[2].nativeElement.checked = true
     displayModeButtons[2].triggerEventHandler('change')
     fixture.detectChanges()
-    expect(component.displayMode).toEqual('largeCards')
+    expect(component.list.displayMode).toEqual('largeCards')
     expect(
       fixture.debugElement.queryAll(By.directive(DocumentCardLargeComponent))
     ).toHaveLength(3)
@@ -319,7 +273,7 @@ describe('DocumentListComponent', () => {
     fixture.detectChanges()
     const sortDropdown = fixture.debugElement.queryAll(
       By.directive(NgbDropdown)
-    )[1]
+    )[2]
     const asnSortFieldButton = sortDropdown.query(By.directive(NgbDropdownItem))
 
     asnSortFieldButton.triggerEventHandler('click')
@@ -329,6 +283,7 @@ describe('DocumentListComponent', () => {
   })
 
   it('should support setting sort field by table head', () => {
+    component.activeDisplayFields = [DisplayField.ASN]
     jest.spyOn(documentListService, 'documents', 'get').mockReturnValue(docs)
     fixture.detectChanges()
     expect(documentListService.sortField).toEqual('created')
@@ -339,7 +294,7 @@ describe('DocumentListComponent', () => {
     detailsDisplayModeButton.nativeElement.checked = true
     detailsDisplayModeButton.triggerEventHandler('change')
     fixture.detectChanges()
-    expect(component.displayMode).toEqual('details')
+    expect(component.list.displayMode).toEqual(DisplayMode.TABLE)
 
     const sortTh = fixture.debugElement.query(By.directive(SortableDirective))
     sortTh.triggerEventHandler('click')
@@ -411,7 +366,7 @@ describe('DocumentListComponent', () => {
   })
 
   it('should support saving an edited view', () => {
-    const view: PaperlessSavedView = {
+    const view: SavedView = {
       id: 10,
       name: 'Saved View 10',
       sort_field: 'added',
@@ -422,6 +377,8 @@ describe('DocumentListComponent', () => {
           value: '20',
         },
       ],
+      display_mode: DisplayMode.SMALL_CARDS,
+      display_fields: [DisplayField.TITLE],
     }
     jest.spyOn(savedViewService, 'getCached').mockReturnValue(of(view))
     const queryParams = { view: view.id.toString() }
@@ -447,7 +404,7 @@ describe('DocumentListComponent', () => {
   })
 
   it('should support edited view saving as', () => {
-    const view: PaperlessSavedView = {
+    const view: SavedView = {
       id: 10,
       name: 'Saved View 10',
       sort_field: 'added',
@@ -493,7 +450,7 @@ describe('DocumentListComponent', () => {
   })
 
   it('should handle error on edited view saving as', () => {
-    const view: PaperlessSavedView = {
+    const view: SavedView = {
       id: 10,
       name: 'Saved View 10',
       sort_field: 'added',
@@ -538,6 +495,42 @@ describe('DocumentListComponent', () => {
     expect(openModal.componentInstance.error).toEqual({ filter_rules: ['11'] })
   })
 
+  it('should detect saved view changes', () => {
+    const view: SavedView = {
+      id: 10,
+      name: 'Saved View 10',
+      sort_field: 'added',
+      sort_reverse: true,
+      filter_rules: [
+        {
+          rule_type: FILTER_HAS_TAGS_ANY,
+          value: '20',
+        },
+      ],
+      page_size: 5,
+      display_mode: DisplayMode.SMALL_CARDS,
+      display_fields: [DisplayField.TITLE],
+    }
+    jest.spyOn(savedViewService, 'getCached').mockReturnValue(of(view))
+    const queryParams = { view: view.id.toString() }
+    jest
+      .spyOn(activatedRoute, 'queryParamMap', 'get')
+      .mockReturnValue(of(convertToParamMap(queryParams)))
+    activatedRoute.snapshot.queryParams = queryParams
+    router.routerState.snapshot.url = '/view/10/'
+    fixture.detectChanges()
+    expect(documentListService.activeSavedViewId).toEqual(10)
+
+    component.list.displayFields = [DisplayField.ASN]
+    expect(component.savedViewIsModified).toBeTruthy()
+    component.list.displayFields = [DisplayField.TITLE]
+    expect(component.savedViewIsModified).toBeFalsy()
+    component.list.displayMode = DisplayMode.TABLE
+    expect(component.savedViewIsModified).toBeTruthy()
+    component.list.displayMode = DisplayMode.SMALL_CARDS
+    expect(component.savedViewIsModified).toBeFalsy()
+  })
+
   it('should navigate to a document', () => {
     fixture.detectChanges()
     const routerSpy = jest.spyOn(router, 'navigate')
@@ -545,22 +538,18 @@ describe('DocumentListComponent', () => {
     expect(routerSpy).toHaveBeenCalledWith(['documents', 99])
   })
 
-  it('should support checking if notes enabled to hide column', () => {
+  it('should hide columns if no perms or notes disabled', () => {
+    jest.spyOn(permissionService, 'currentUserCan').mockReturnValue(true)
     jest.spyOn(documentListService, 'documents', 'get').mockReturnValue(docs)
-    fixture.detectChanges()
     expect(documentListService.sortField).toEqual('created')
 
-    const detailsDisplayModeButton = fixture.debugElement.query(
-      By.css('input[type="radio"]')
-    )
-    detailsDisplayModeButton.nativeElement.checked = true
-    detailsDisplayModeButton.triggerEventHandler('change')
+    component.list.displayMode = DisplayMode.TABLE
+    component.list.displayFields = DEFAULT_DISPLAY_FIELDS.map((f) => f.id)
     fixture.detectChanges()
-    expect(component.displayMode).toEqual('details')
 
     expect(
       fixture.debugElement.queryAll(By.directive(SortableDirective))
-    ).toHaveLength(9)
+    ).toHaveLength(10)
 
     expect(component.notesEnabled).toBeTruthy()
     settingsService.set(SETTINGS_KEYS.NOTES_ENABLED, false)
@@ -568,7 +557,14 @@ describe('DocumentListComponent', () => {
     expect(component.notesEnabled).toBeFalsy()
     expect(
       fixture.debugElement.queryAll(By.directive(SortableDirective))
-    ).toHaveLength(8)
+    ).toHaveLength(9)
+
+    // insufficient perms
+    jest.spyOn(permissionService, 'currentUserCan').mockReturnValue(false)
+    fixture.detectChanges()
+    expect(
+      fixture.debugElement.queryAll(By.directive(SortableDirective))
+    ).toHaveLength(5)
   })
 
   it('should support toggle on document objects', () => {
@@ -587,5 +583,92 @@ describe('DocumentListComponent', () => {
     expect(qfSpy).toHaveBeenCalledWith([
       { rule_type: FILTER_FULLTEXT_MORELIKE, value: '99' },
     ])
+  })
+
+  it('should support toggling display fields', () => {
+    fixture.detectChanges()
+    component.activeDisplayFields = [DisplayField.ASN]
+    component.toggleDisplayField(DisplayField.TITLE)
+    expect(component.activeDisplayFields).toEqual([
+      DisplayField.ASN,
+      DisplayField.TITLE,
+    ])
+    component.toggleDisplayField(DisplayField.ASN)
+    expect(component.activeDisplayFields).toEqual([DisplayField.TITLE])
+  })
+
+  it('should get custom field title', () => {
+    fixture.detectChanges()
+    jest
+      .spyOn(settingsService, 'allDisplayFields', 'get')
+      .mockReturnValue([
+        { id: 'custom_field_1' as any, name: 'Custom Field 1' },
+      ])
+    expect(component.getDisplayCustomFieldTitle('custom_field_1')).toEqual(
+      'Custom Field 1'
+    )
+  })
+
+  it('should support hotkeys', () => {
+    fixture.detectChanges()
+    const resetSpy = jest.spyOn(component['filterEditor'], 'resetSelected')
+    jest.spyOn(component, 'isFiltered', 'get').mockReturnValue(true)
+    component.clickTag(1)
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'escape' }))
+    expect(resetSpy).toHaveBeenCalled()
+
+    jest
+      .spyOn(documentListService, 'selected', 'get')
+      .mockReturnValue(new Set([1]))
+    const clearSelectedSpy = jest.spyOn(documentListService, 'selectNone')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'escape' }))
+    expect(clearSelectedSpy).toHaveBeenCalled()
+
+    const selectAllSpy = jest.spyOn(documentListService, 'selectAll')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'a' }))
+    expect(selectAllSpy).toHaveBeenCalled()
+
+    const selectPageSpy = jest.spyOn(documentListService, 'selectPage')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'p' }))
+    expect(selectPageSpy).toHaveBeenCalled()
+
+    jest.spyOn(documentListService, 'documents', 'get').mockReturnValue(docs)
+    fixture.detectChanges()
+    const detailSpy = jest.spyOn(component, 'openDocumentDetail')
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'o' }))
+    expect(detailSpy).toHaveBeenCalledWith(docs[0])
+
+    jest.spyOn(documentListService, 'documents', 'get').mockReturnValue(docs)
+    jest
+      .spyOn(documentListService, 'selected', 'get')
+      .mockReturnValue(new Set([docs[1].id]))
+    fixture.detectChanges()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'o' }))
+    expect(detailSpy).toHaveBeenCalledWith(docs[1].id)
+
+    const lotsOfDocs: Document[] = Array.from({ length: 100 }, (_, i) => ({
+      id: i + 1,
+      title: `Doc${i + 1}`,
+      notes: [],
+      content: `document content ${i + 1}`,
+    }))
+    jest
+      .spyOn(documentListService, 'documents', 'get')
+      .mockReturnValue(lotsOfDocs)
+    jest
+      .spyOn(documentService, 'listAllFilteredIds')
+      .mockReturnValue(of(lotsOfDocs.map((d) => d.id)))
+    jest.spyOn(documentListService, 'getLastPage').mockReturnValue(4)
+    fixture.detectChanges()
+
+    expect(component.list.currentPage).toEqual(1)
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowRight', ctrlKey: true })
+    )
+    expect(component.list.currentPage).toEqual(2)
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'ArrowLeft', ctrlKey: true })
+    )
+    expect(component.list.currentPage).toEqual(1)
   })
 })

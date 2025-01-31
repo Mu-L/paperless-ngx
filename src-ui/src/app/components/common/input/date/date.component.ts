@@ -6,12 +6,19 @@ import {
   OnInit,
   Output,
 } from '@angular/core'
-import { NG_VALUE_ACCESSOR } from '@angular/forms'
+import {
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { RouterModule } from '@angular/router'
 import {
   NgbDateAdapter,
   NgbDateParserFormatter,
+  NgbDatepickerModule,
   NgbDateStruct,
 } from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
 import { SettingsService } from 'src/app/services/settings.service'
 import { AbstractInputComponent } from '../abstract-input'
 
@@ -23,9 +30,16 @@ import { AbstractInputComponent } from '../abstract-input'
       multi: true,
     },
   ],
-  selector: 'app-input-date',
+  selector: 'pngx-input-date',
   templateUrl: './date.component.html',
   styleUrls: ['./date.component.scss'],
+  imports: [
+    NgbDatepickerModule,
+    FormsModule,
+    ReactiveFormsModule,
+    RouterModule,
+    NgxBootstrapIconsModule,
+  ],
 })
 export class DateComponent
   extends AbstractInputComponent<string>
@@ -90,7 +104,11 @@ export class DateComponent
   }
 
   onKeyPress(event: KeyboardEvent) {
-    if ('Enter' !== event.key && !/[0-9,\.\/-]+/.test(event.key)) {
+    if (
+      'Enter' !== event.key &&
+      !(event.altKey || event.metaKey || event.ctrlKey) &&
+      !/[0-9,\.\/-]+/.test(event.key)
+    ) {
       event.preventDefault()
     }
   }

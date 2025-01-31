@@ -1,14 +1,15 @@
 import { Component } from '@angular/core'
 import { ComponentFixture, TestBed } from '@angular/core/testing'
-import { IfOwnerDirective } from './if-owner.directive'
 import { PermissionsService } from '../services/permissions.service'
+import { IfOwnerDirective } from './if-owner.directive'
 
 @Component({
   template: `
     <div>
-      <button *appIfOwner="{ id: 2, owner: user1 }">Some Text</button>
+      <button *pngxIfOwner="{ id: 2, owner: user1 }">Some Text</button>
     </div>
   `,
+  imports: [IfOwnerDirective],
 })
 class TestComponent {}
 
@@ -18,7 +19,7 @@ describe('IfOwnerDirective', () => {
 
   beforeEach(() => {
     TestBed.configureTestingModule({
-      declarations: [IfOwnerDirective, TestComponent],
+      imports: [IfOwnerDirective, TestComponent],
       providers: [PermissionsService],
     })
     permissionsService = TestBed.inject(PermissionsService)

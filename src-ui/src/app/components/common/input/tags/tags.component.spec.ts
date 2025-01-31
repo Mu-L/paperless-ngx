@@ -1,32 +1,39 @@
-import {
-  ComponentFixture,
-  TestBed,
-  fakeAsync,
-  tick,
-} from '@angular/core/testing'
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
+import { provideHttpClientTesting } from '@angular/common/http/testing'
+import { ComponentFixture, TestBed } from '@angular/core/testing'
 import {
   FormsModule,
-  ReactiveFormsModule,
   NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
 } from '@angular/forms'
-import { TagsComponent } from './tags.component'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
+import { RouterTestingModule } from '@angular/router/testing'
+import {
+  NgbAccordionModule,
+  NgbModal,
+  NgbModalModule,
+  NgbModalRef,
+  NgbPopoverModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgSelectModule } from '@ng-select/ng-select'
+import { NgxBootstrapIconsModule, allIcons } from 'ngx-bootstrap-icons'
+import { of } from 'rxjs'
 import {
   DEFAULT_MATCHING_ALGORITHM,
   MATCH_ALL,
 } from 'src/app/data/matching-model'
-import { NgSelectModule } from '@ng-select/ng-select'
-import { RouterTestingModule } from '@angular/router/testing'
-import { HttpClientTestingModule } from '@angular/common/http/testing'
-import { of } from 'rxjs'
+import { Tag } from 'src/app/data/tag'
+import { IfOwnerDirective } from 'src/app/directives/if-owner.directive'
 import { TagService } from 'src/app/services/rest/tag.service'
-import {
-  NgbModal,
-  NgbModalModule,
-  NgbModalRef,
-} from '@ng-bootstrap/ng-bootstrap'
+import { SettingsService } from 'src/app/services/settings.service'
+import { TagEditDialogComponent } from '../../edit-dialog/tag-edit-dialog/tag-edit-dialog.component'
+import { CheckComponent } from '../check/check.component'
+import { ColorComponent } from '../color/color.component'
+import { PermissionsFormComponent } from '../permissions/permissions-form/permissions-form.component'
+import { SelectComponent } from '../select/select.component'
+import { TextComponent } from '../text/text.component'
+import { TagsComponent } from './tags.component'
 
-const tags: PaperlessTag[] = [
+const tags: Tag[] = [
   {
     id: 1,
     name: 'Tag1',
@@ -51,31 +58,54 @@ const tags: PaperlessTag[] = [
 describe('TagsComponent', () => {
   let component: TagsComponent
   let fixture: ComponentFixture<TagsComponent>
-  let input: HTMLInputElement
   let modalService: NgbModal
+  let settingsService: SettingsService
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [TagsComponent],
-      providers: [
-        {
-          provide: TagService,
-          useValue: {
-            listAll: () => of(tags),
-          },
-        },
-      ],
       imports: [
         FormsModule,
         ReactiveFormsModule,
         NgSelectModule,
         RouterTestingModule,
-        HttpClientTestingModule,
         NgbModalModule,
+        NgbAccordionModule,
+        NgbPopoverModule,
+        NgxBootstrapIconsModule.pick(allIcons),
+        TagsComponent,
+        TagEditDialogComponent,
+        TextComponent,
+        ColorComponent,
+        IfOwnerDirective,
+        SelectComponent,
+        TextComponent,
+        PermissionsFormComponent,
+        ColorComponent,
+        CheckComponent,
+      ],
+      providers: [
+        {
+          provide: TagService,
+          useValue: {
+            listAll: () =>
+              of({
+                results: tags,
+              }),
+            create: () =>
+              of({
+                name: 'bar',
+                id: 99,
+                color: '#fff000',
+              }),
+          },
+        },
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
       ],
     }).compileComponents()
 
     modalService = TestBed.inject(NgbModal)
+    settingsService = TestBed.inject(SettingsService)
     fixture = TestBed.createComponent(TagsComponent)
     fixture.debugElement.injector.get(NG_VALUE_ACCESSOR)
     component = fixture.componentInstance
@@ -85,7 +115,7 @@ describe('TagsComponent', () => {
   })
 
   it('should support suggestions', () => {
-    expect(component.value).toBeUndefined()
+    expect(component.value).toHaveLength(0)
     component.value = []
     component.tags = tags
     component.suggestions = [1, 2]
@@ -105,20 +135,21 @@ describe('TagsComponent', () => {
   })
 
   it('should support create new using last search term and open a modal', () => {
+    settingsService.currentUser = { id: 1 }
     let activeInstances: NgbModalRef[]
     modalService.activeInstances.subscribe((v) => (activeInstances = v))
-    component.onSearch({ term: 'bar' })
+    component.select.searchTerm = 'foobar'
     component.createTag()
     expect(modalService.hasOpenModals()).toBeTruthy()
-    expect(activeInstances[0].componentInstance.object.name).toEqual('bar')
+    expect(activeInstances[0].componentInstance.object.name).toEqual('foobar')
+    const editDialog = activeInstances[0]
+      .componentInstance as TagEditDialogComponent
+    editDialog.save() // create is mocked
+    fixture.detectChanges()
+    fixture.whenStable().then(() => {
+      expect(fixture.debugElement.nativeElement.textContent).toContain('foobar')
+    })
   })
-
-  it('should clear search term on blur after delay', fakeAsync(() => {
-    const clearSpy = jest.spyOn(component, 'clearLastSearchTerm')
-    component.onBlur()
-    tick(3000)
-    expect(clearSpy).toHaveBeenCalled()
-  }))
 
   it('support remove tags', () => {
     component.tags = tags
@@ -132,9 +163,18 @@ describe('TagsComponent', () => {
   })
 
   it('should get tags', () => {
+    component.tags = null
     expect(component.getTag(2)).toBeNull()
     component.tags = tags
     expect(component.getTag(2)).toEqual(tags[1])
     expect(component.getTag(4)).toBeUndefined()
+  })
+
+  it('should emit filtered documents', () => {
+    component.value = [10]
+    component.tags = tags
+    const emitSpy = jest.spyOn(component.filterDocuments, 'emit')
+    component.onFilterDocuments()
+    expect(emitSpy).toHaveBeenCalledWith([tags[2]])
   })
 })

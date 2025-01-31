@@ -1,13 +1,14 @@
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
+import { provideHttpClientTesting } from '@angular/common/http/testing'
 import { ComponentFixture, TestBed } from '@angular/core/testing'
 import {
   FormsModule,
   NG_VALUE_ACCESSOR,
   ReactiveFormsModule,
 } from '@angular/forms'
-import { NumberComponent } from './number.component'
-import { DocumentService } from 'src/app/services/rest/document.service'
-import { HttpClientTestingModule } from '@angular/common/http/testing'
 import { of } from 'rxjs'
+import { DocumentService } from 'src/app/services/rest/document.service'
+import { NumberComponent } from './number.component'
 
 describe('NumberComponent', () => {
   let component: NumberComponent
@@ -17,9 +18,12 @@ describe('NumberComponent', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [NumberComponent],
-      providers: [DocumentService],
-      imports: [FormsModule, ReactiveFormsModule, HttpClientTestingModule],
+      imports: [FormsModule, ReactiveFormsModule, NumberComponent],
+      providers: [
+        DocumentService,
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
+      ],
     }).compileComponents()
 
     fixture = TestBed.createComponent(NumberComponent)
@@ -30,39 +34,9 @@ describe('NumberComponent', () => {
     input = component.inputField.nativeElement
   })
 
-  // TODO: why doesnt this work?
-  // it('should support use of input field', () => {
-  //   expect(component.value).toBeUndefined()
-  //   input.stepUp()
-  //   console.log(input.value);
-
-  //   input.dispatchEvent(new Event('change'))
-  //   fixture.detectChanges()
-  //   expect(component.value).toEqual('3')
-  // })
-
   it('should support +1 ASN', () => {
-    const listAllSpy = jest.spyOn(documentService, 'listFiltered')
-    listAllSpy
-      .mockReturnValueOnce(
-        of({
-          count: 1,
-          all: [1],
-          results: [
-            {
-              id: 1,
-              archive_serial_number: 1000,
-            },
-          ],
-        })
-      )
-      .mockReturnValueOnce(
-        of({
-          count: 0,
-          all: [],
-          results: [],
-        })
-      )
+    const nextAsnSpy = jest.spyOn(documentService, 'getNextAsn')
+    nextAsnSpy.mockReturnValueOnce(of(1001)).mockReturnValueOnce(of(1))
     expect(component.value).toBeUndefined()
     component.nextAsn()
     expect(component.value).toEqual(1001)
@@ -75,5 +49,27 @@ describe('NumberComponent', () => {
     component.value = 1002
     component.nextAsn()
     expect(component.value).toEqual(1002)
+  })
+
+  it('should support float, monetary values & scientific notation', () => {
+    const mockFn = jest.fn()
+    component.registerOnChange(mockFn)
+
+    component.step = 1
+    component.onChange(11.13)
+    expect(mockFn).toHaveBeenCalledWith(11)
+
+    component.onChange(1.23456789e8)
+    expect(mockFn).toHaveBeenCalledWith(123456789)
+
+    component.step = 0.01
+    component.onChange(11.1)
+    expect(mockFn).toHaveBeenCalledWith('11.10')
+  })
+
+  it('should display monetary values fixed to 2 decimals', () => {
+    component.step = 0.01
+    component.writeValue(11.1)
+    expect(component.value).toEqual('11.10')
   })
 })

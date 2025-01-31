@@ -1,7 +1,18 @@
+import { NgTemplateOutlet } from '@angular/common'
 import { Component, forwardRef, Input, OnInit } from '@angular/core'
-import { FormControl, FormGroup, NG_VALUE_ACCESSOR } from '@angular/forms'
-import { PaperlessUser } from 'src/app/data/paperless-user'
+import {
+  FormControl,
+  FormGroup,
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { NgbAccordionModule } from '@ng-bootstrap/ng-bootstrap'
+import { User } from 'src/app/data/user'
 import { AbstractInputComponent } from '../../abstract-input'
+import { SelectComponent } from '../../select/select.component'
+import { PermissionsGroupComponent } from '../permissions-group/permissions-group.component'
+import { PermissionsUserComponent } from '../permissions-user/permissions-user.component'
 
 export interface PermissionsFormObject {
   owner?: number
@@ -25,16 +36,25 @@ export interface PermissionsFormObject {
       multi: true,
     },
   ],
-  selector: 'app-permissions-form',
+  selector: 'pngx-permissions-form',
   templateUrl: './permissions-form.component.html',
   styleUrls: ['./permissions-form.component.scss'],
+  imports: [
+    SelectComponent,
+    PermissionsUserComponent,
+    PermissionsGroupComponent,
+    FormsModule,
+    ReactiveFormsModule,
+    NgTemplateOutlet,
+    NgbAccordionModule,
+  ],
 })
 export class PermissionsFormComponent
   extends AbstractInputComponent<PermissionsFormObject>
   implements OnInit
 {
   @Input()
-  users: PaperlessUser[]
+  users: User[]
 
   @Input()
   accordion: boolean = false
@@ -65,5 +85,13 @@ export class PermissionsFormComponent
 
   writeValue(newValue: any): void {
     this.form.patchValue(newValue, { emitEvent: false })
+  }
+
+  public setDisabledState(isDisabled: boolean): void {
+    if (isDisabled) {
+      this.form.disable()
+    } else {
+      this.form.enable()
+    }
   }
 }

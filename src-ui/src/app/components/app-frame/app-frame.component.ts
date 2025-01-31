@@ -1,59 +1,96 @@
+import {
+  CdkDragDrop,
+  CdkDragEnd,
+  CdkDragStart,
+  DragDropModule,
+  moveItemInArray,
+} from '@angular/cdk/drag-drop'
+import { NgClass } from '@angular/common'
 import { Component, HostListener, OnInit } from '@angular/core'
-import { FormControl } from '@angular/forms'
-import { ActivatedRoute, Router } from '@angular/router'
-import { from, Observable } from 'rxjs'
+import { ActivatedRoute, Router, RouterModule } from '@angular/router'
 import {
-  debounceTime,
-  distinctUntilChanged,
-  map,
-  switchMap,
-  first,
-} from 'rxjs/operators'
-import { PaperlessDocument } from 'src/app/data/paperless-document'
-import { OpenDocumentsService } from 'src/app/services/open-documents.service'
-import { SavedViewService } from 'src/app/services/rest/saved-view.service'
-import { SearchService } from 'src/app/services/rest/search.service'
-import { environment } from 'src/environments/environment'
-import { DocumentDetailComponent } from '../document-detail/document-detail.component'
-import { DocumentListViewService } from 'src/app/services/document-list-view.service'
-import { FILTER_FULLTEXT_QUERY } from 'src/app/data/filter-rule-type'
-import {
-  RemoteVersionService,
-  AppRemoteVersion,
-} from 'src/app/services/rest/remote-version.service'
-import { SettingsService } from 'src/app/services/settings.service'
-import { TasksService } from 'src/app/services/tasks.service'
+  NgbCollapseModule,
+  NgbDropdownModule,
+  NgbModal,
+  NgbNavModule,
+  NgbPopoverModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { TourNgBootstrapModule } from 'ngx-ui-tour-ng-bootstrap'
+import { Observable } from 'rxjs'
+import { first } from 'rxjs/operators'
+import { Document } from 'src/app/data/document'
+import { SavedView } from 'src/app/data/saved-view'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
 import { ComponentCanDeactivate } from 'src/app/guards/dirty-doc.guard'
-import { SETTINGS_KEYS } from 'src/app/data/paperless-uisettings'
-import { ToastService } from 'src/app/services/toast.service'
-import { ComponentWithPermissions } from '../with-permissions/with-permissions.component'
+import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
+import {
+  DjangoMessageLevel,
+  DjangoMessagesService,
+} from 'src/app/services/django-messages.service'
+import { OpenDocumentsService } from 'src/app/services/open-documents.service'
 import {
   PermissionAction,
   PermissionsService,
   PermissionType,
 } from 'src/app/services/permissions.service'
+import {
+  AppRemoteVersion,
+  RemoteVersionService,
+} from 'src/app/services/rest/remote-version.service'
+import { SavedViewService } from 'src/app/services/rest/saved-view.service'
+import { SettingsService } from 'src/app/services/settings.service'
+import { TasksService } from 'src/app/services/tasks.service'
+import { ToastService } from 'src/app/services/toast.service'
+import { environment } from 'src/environments/environment'
+import { ProfileEditDialogComponent } from '../common/profile-edit-dialog/profile-edit-dialog.component'
+import { DocumentDetailComponent } from '../document-detail/document-detail.component'
+import { ComponentWithPermissions } from '../with-permissions/with-permissions.component'
+import { GlobalSearchComponent } from './global-search/global-search.component'
 
 @Component({
-  selector: 'app-app-frame',
+  selector: 'pngx-app-frame',
   templateUrl: './app-frame.component.html',
   styleUrls: ['./app-frame.component.scss'],
+  imports: [
+    GlobalSearchComponent,
+    DocumentTitlePipe,
+    IfPermissionsDirective,
+    RouterModule,
+    NgClass,
+    NgbDropdownModule,
+    NgbPopoverModule,
+    NgbCollapseModule,
+    NgbNavModule,
+    NgxBootstrapIconsModule,
+    DragDropModule,
+    TourNgBootstrapModule,
+  ],
 })
 export class AppFrameComponent
   extends ComponentWithPermissions
   implements OnInit, ComponentCanDeactivate
 {
+  versionString = `${environment.appTitle} ${environment.version}`
+  appRemoteVersion: AppRemoteVersion
+
+  isMenuCollapsed: boolean = true
+
+  slimSidebarAnimating: boolean = false
+
   constructor(
     public router: Router,
     private activatedRoute: ActivatedRoute,
     private openDocumentsService: OpenDocumentsService,
-    private searchService: SearchService,
     public savedViewService: SavedViewService,
     private remoteVersionService: RemoteVersionService,
-    private list: DocumentListViewService,
     public settingsService: SettingsService,
     public tasksService: TasksService,
     private readonly toastService: ToastService,
-    permissionsService: PermissionsService
+    private modalService: NgbModal,
+    public permissionsService: PermissionsService,
+    private djangoMessagesService: DjangoMessagesService
   ) {
     super()
 
@@ -63,7 +100,7 @@ export class AppFrameComponent
         PermissionType.SavedView
       )
     ) {
-      savedViewService.initialize()
+      this.savedViewService.reload()
     }
   }
 
@@ -71,15 +108,29 @@ export class AppFrameComponent
     if (this.settingsService.get(SETTINGS_KEYS.UPDATE_CHECKING_ENABLED)) {
       this.checkForUpdates()
     }
-    this.tasksService.reload()
+    if (
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.PaperlessTask
+      )
+    ) {
+      this.tasksService.reload()
+    }
+
+    this.djangoMessagesService.get().forEach((message) => {
+      switch (message.level) {
+        case DjangoMessageLevel.ERROR:
+        case DjangoMessageLevel.WARNING:
+          this.toastService.showError(message.message)
+          break
+        case DjangoMessageLevel.SUCCESS:
+        case DjangoMessageLevel.INFO:
+        case DjangoMessageLevel.DEBUG:
+          this.toastService.showInfo(message.message)
+          break
+      }
+    })
   }
-
-  versionString = `${environment.appTitle} ${environment.version}`
-  appRemoteVersion: AppRemoteVersion
-
-  isMenuCollapsed: boolean = true
-
-  slimSidebarAnimating: boolean = false
 
   toggleSlimSidebar(): void {
     this.slimSidebarAnimating = true
@@ -87,6 +138,10 @@ export class AppFrameComponent
     setTimeout(() => {
       this.slimSidebarAnimating = false
     }, 200) // slightly longer than css animation for slim sidebar
+  }
+
+  get customAppTitle(): string {
+    return this.settingsService.get(SETTINGS_KEYS.APP_TITLE)
   }
 
   get slimSidebarEnabled(): boolean {
@@ -112,7 +167,15 @@ export class AppFrameComponent
     this.isMenuCollapsed = true
   }
 
-  get openDocuments(): PaperlessDocument[] {
+  editProfile() {
+    this.modalService.open(ProfileEditDialogComponent, {
+      backdrop: 'static',
+      size: 'xl',
+    })
+    this.closeMenu()
+  }
+
+  get openDocuments(): Document[] {
     return this.openDocumentsService.getOpenDocuments()
   }
 
@@ -121,62 +184,7 @@ export class AppFrameComponent
     return !this.openDocumentsService.hasDirty()
   }
 
-  searchField = new FormControl('')
-
-  get searchFieldEmpty(): boolean {
-    return this.searchField.value.trim().length == 0
-  }
-
-  resetSearchField() {
-    this.searchField.reset('')
-  }
-
-  searchFieldKeyup(event: KeyboardEvent) {
-    if (event.key == 'Escape') {
-      this.resetSearchField()
-    }
-  }
-
-  searchAutoComplete = (text$: Observable<string>) =>
-    text$.pipe(
-      debounceTime(200),
-      distinctUntilChanged(),
-      map((term) => {
-        if (term.lastIndexOf(' ') != -1) {
-          return term.substring(term.lastIndexOf(' ') + 1)
-        } else {
-          return term
-        }
-      }),
-      switchMap((term) =>
-        term.length < 2 ? from([[]]) : this.searchService.autocomplete(term)
-      )
-    )
-
-  itemSelected(event) {
-    event.preventDefault()
-    let currentSearch: string = this.searchField.value
-    let lastSpaceIndex = currentSearch.lastIndexOf(' ')
-    if (lastSpaceIndex != -1) {
-      currentSearch = currentSearch.substring(0, lastSpaceIndex + 1)
-      currentSearch += event.item + ' '
-    } else {
-      currentSearch = event.item + ' '
-    }
-    this.searchField.patchValue(currentSearch)
-  }
-
-  search() {
-    this.closeMenu()
-    this.list.quickFilter([
-      {
-        rule_type: FILTER_FULLTEXT_QUERY,
-        value: (this.searchField.value as string).trim(),
-      },
-    ])
-  }
-
-  closeDocument(d: PaperlessDocument) {
+  closeDocument(d: Document) {
     this.openDocumentsService
       .closeDocument(d)
       .pipe(first())
@@ -216,6 +224,28 @@ export class AppFrameComponent
           }
         }
       })
+  }
+
+  onDragStart(event: CdkDragStart) {
+    this.settingsService.globalDropzoneEnabled = false
+  }
+
+  onDragEnd(event: CdkDragEnd) {
+    this.settingsService.globalDropzoneEnabled = true
+  }
+
+  onDrop(event: CdkDragDrop<SavedView[]>) {
+    const sidebarViews = this.savedViewService.sidebarViews.concat([])
+    moveItemInArray(sidebarViews, event.previousIndex, event.currentIndex)
+
+    this.settingsService.updateSidebarViewsSort(sidebarViews).subscribe({
+      next: () => {
+        this.toastService.showInfo($localize`Sidebar views updated`)
+      },
+      error: (e) => {
+        this.toastService.showError($localize`Error updating sidebar views`, e)
+      },
+    })
   }
 
   private checkForUpdates() {

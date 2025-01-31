@@ -1,16 +1,13 @@
-import { CanDeactivate } from '@angular/router'
 import { Injectable } from '@angular/core'
-import { first, Observable, Subject } from 'rxjs'
-import { DocumentListComponent } from '../components/document-list/document-list.component'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
+import { first, Observable, Subject } from 'rxjs'
 import { ConfirmDialogComponent } from '../components/common/confirm-dialog/confirm-dialog.component'
+import { DocumentListComponent } from '../components/document-list/document-list.component'
+import { SETTINGS_KEYS } from '../data/ui-settings'
 import { SettingsService } from '../services/settings.service'
-import { SETTINGS_KEYS } from '../data/paperless-uisettings'
 
 @Injectable()
-export class DirtySavedViewGuard
-  implements CanDeactivate<DocumentListComponent>
-{
+export class DirtySavedViewGuard {
   constructor(
     private modalService: NgbModal,
     private settings: SettingsService

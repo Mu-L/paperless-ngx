@@ -1,82 +1,110 @@
 import { DatePipe } from '@angular/common'
-import { HttpClientTestingModule } from '@angular/common/http/testing'
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
+import {
+  HttpTestingController,
+  provideHttpClientTesting,
+} from '@angular/common/http/testing'
 import {
   ComponentFixture,
-  fakeAsync,
   TestBed,
+  fakeAsync,
   tick,
 } from '@angular/core/testing'
 import { FormsModule, ReactiveFormsModule } from '@angular/forms'
 import { By } from '@angular/platform-browser'
-import { RouterTestingModule } from '@angular/router/testing'
+import { RouterModule } from '@angular/router'
 import {
-  NgbDropdownModule,
   NgbDatepickerModule,
   NgbDropdownItem,
+  NgbDropdownModule,
+  NgbTypeaheadModule,
 } from '@ng-bootstrap/ng-bootstrap'
-import { NgSelectComponent } from '@ng-select/ng-select'
-import { of } from 'rxjs'
+import { NgSelectComponent, NgSelectModule } from '@ng-select/ng-select'
+import { NgxBootstrapIconsModule, allIcons } from 'ngx-bootstrap-icons'
+import { of, throwError } from 'rxjs'
+import { Correspondent } from 'src/app/data/correspondent'
+import { CustomField, CustomFieldDataType } from 'src/app/data/custom-field'
 import {
-  FILTER_TITLE,
-  FILTER_TITLE_CONTENT,
-  FILTER_ASN,
-  FILTER_ASN_ISNULL,
-  FILTER_ASN_GT,
-  FILTER_ASN_LT,
-  FILTER_FULLTEXT_QUERY,
-  FILTER_FULLTEXT_MORELIKE,
-  FILTER_CREATED_AFTER,
-  FILTER_CREATED_BEFORE,
+  CustomFieldQueryLogicalOperator,
+  CustomFieldQueryOperator,
+} from 'src/app/data/custom-field-query'
+import { DocumentType } from 'src/app/data/document-type'
+import {
   FILTER_ADDED_AFTER,
   FILTER_ADDED_BEFORE,
+  FILTER_ASN,
+  FILTER_ASN_GT,
+  FILTER_ASN_ISNULL,
+  FILTER_ASN_LT,
+  FILTER_CORRESPONDENT,
+  FILTER_CREATED_AFTER,
+  FILTER_CREATED_BEFORE,
+  FILTER_CUSTOM_FIELDS_QUERY,
+  FILTER_CUSTOM_FIELDS_TEXT,
+  FILTER_DOCUMENT_TYPE,
+  FILTER_DOES_NOT_HAVE_CORRESPONDENT,
+  FILTER_DOES_NOT_HAVE_DOCUMENT_TYPE,
+  FILTER_DOES_NOT_HAVE_STORAGE_PATH,
+  FILTER_DOES_NOT_HAVE_TAG,
+  FILTER_FULLTEXT_MORELIKE,
+  FILTER_FULLTEXT_QUERY,
+  FILTER_HAS_ANY_TAG,
+  FILTER_HAS_CORRESPONDENT_ANY,
+  FILTER_HAS_CUSTOM_FIELDS_ALL,
+  FILTER_HAS_CUSTOM_FIELDS_ANY,
+  FILTER_HAS_DOCUMENT_TYPE_ANY,
+  FILTER_HAS_STORAGE_PATH_ANY,
   FILTER_HAS_TAGS_ALL,
   FILTER_HAS_TAGS_ANY,
-  FILTER_HAS_ANY_TAG,
-  FILTER_DOES_NOT_HAVE_TAG,
-  FILTER_CORRESPONDENT,
-  FILTER_HAS_CORRESPONDENT_ANY,
-  FILTER_DOES_NOT_HAVE_CORRESPONDENT,
-  FILTER_DOCUMENT_TYPE,
-  FILTER_HAS_DOCUMENT_TYPE_ANY,
-  FILTER_DOES_NOT_HAVE_DOCUMENT_TYPE,
-  FILTER_STORAGE_PATH,
-  FILTER_HAS_STORAGE_PATH_ANY,
-  FILTER_DOES_NOT_HAVE_STORAGE_PATH,
   FILTER_OWNER,
   FILTER_OWNER_ANY,
   FILTER_OWNER_DOES_NOT_INCLUDE,
   FILTER_OWNER_ISNULL,
+  FILTER_SHARED_BY_USER,
+  FILTER_STORAGE_PATH,
+  FILTER_TITLE,
+  FILTER_TITLE_CONTENT,
 } from 'src/app/data/filter-rule-type'
-import { PaperlessCorrespondent } from 'src/app/data/paperless-correspondent'
-import { PaperlessDocumentType } from 'src/app/data/paperless-document-type'
-import { PaperlessStoragePath } from 'src/app/data/paperless-storage-path'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
-import { PaperlessUser } from 'src/app/data/paperless-user'
+import { StoragePath } from 'src/app/data/storage-path'
+import { Tag } from 'src/app/data/tag'
+import { User } from 'src/app/data/user'
 import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
 import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
 import { FilterPipe } from 'src/app/pipes/filter.pipe'
+import {
+  PermissionType,
+  PermissionsService,
+} from 'src/app/services/permissions.service'
 import { CorrespondentService } from 'src/app/services/rest/correspondent.service'
+import { CustomFieldsService } from 'src/app/services/rest/custom-fields.service'
 import { DocumentTypeService } from 'src/app/services/rest/document-type.service'
 import { DocumentService } from 'src/app/services/rest/document.service'
+import { SearchService } from 'src/app/services/rest/search.service'
 import { StoragePathService } from 'src/app/services/rest/storage-path.service'
 import { TagService } from 'src/app/services/rest/tag.service'
 import { UserService } from 'src/app/services/rest/user.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import {
+  CustomFieldQueryAtom,
+  CustomFieldQueryExpression,
+} from 'src/app/utils/custom-field-query-element'
+import { environment } from 'src/environments/environment'
 import { ClearableBadgeComponent } from '../../common/clearable-badge/clearable-badge.component'
-import { DateDropdownComponent } from '../../common/date-dropdown/date-dropdown.component'
+import { CustomFieldsQueryDropdownComponent } from '../../common/custom-fields-query-dropdown/custom-fields-query-dropdown.component'
+import { DatesDropdownComponent } from '../../common/dates-dropdown/dates-dropdown.component'
 import {
   FilterableDropdownComponent,
-  LogicalOperator,
   Intersection,
+  LogicalOperator,
 } from '../../common/filterable-dropdown/filterable-dropdown.component'
 import { ToggleableDropdownButtonComponent } from '../../common/filterable-dropdown/toggleable-dropdown-button/toggleable-dropdown-button.component'
 import {
-  PermissionsFilterDropdownComponent,
   OwnerFilterType,
+  PermissionsFilterDropdownComponent,
 } from '../../common/permissions-filter-dropdown/permissions-filter-dropdown.component'
 import { FilterEditorComponent } from './filter-editor.component'
 
-const tags: PaperlessTag[] = [
+const tags: Tag[] = [
   {
     id: 2,
     name: 'Tag2',
@@ -87,7 +115,7 @@ const tags: PaperlessTag[] = [
   },
 ]
 
-const correspondents: PaperlessCorrespondent[] = [
+const correspondents: Correspondent[] = [
   {
     id: 12,
     name: 'Corresp12',
@@ -98,7 +126,7 @@ const correspondents: PaperlessCorrespondent[] = [
   },
 ]
 
-const document_types: PaperlessDocumentType[] = [
+const document_types: DocumentType[] = [
   {
     id: 22,
     name: 'DocType22',
@@ -109,7 +137,7 @@ const document_types: PaperlessDocumentType[] = [
   },
 ]
 
-const storage_paths: PaperlessStoragePath[] = [
+const storage_paths: StoragePath[] = [
   {
     id: 32,
     name: 'StoragePath32',
@@ -120,7 +148,20 @@ const storage_paths: PaperlessStoragePath[] = [
   },
 ]
 
-const users: PaperlessUser[] = [
+const custom_fields: CustomField[] = [
+  {
+    id: 42,
+    data_type: CustomFieldDataType.String,
+    name: 'CustomField42',
+  },
+  {
+    id: 43,
+    data_type: CustomFieldDataType.String,
+    name: 'CustomField43',
+  },
+]
+
+const users: User[] = [
   {
     id: 1,
     username: 'user1',
@@ -132,10 +173,21 @@ describe('FilterEditorComponent', () => {
   let fixture: ComponentFixture<FilterEditorComponent>
   let documentService: DocumentService
   let settingsService: SettingsService
+  let permissionsService: PermissionsService
+  let httpTestingController: HttpTestingController
+  let searchService: SearchService
 
   beforeEach(fakeAsync(() => {
     TestBed.configureTestingModule({
-      declarations: [
+      imports: [
+        RouterModule,
+        NgbDropdownModule,
+        FormsModule,
+        ReactiveFormsModule,
+        NgbDatepickerModule,
+        NgxBootstrapIconsModule.pick(allIcons),
+        NgbTypeaheadModule,
+        NgSelectModule,
         FilterEditorComponent,
         FilterableDropdownComponent,
         PermissionsFilterDropdownComponent,
@@ -143,8 +195,9 @@ describe('FilterEditorComponent', () => {
         IfPermissionsDirective,
         ClearableBadgeComponent,
         ToggleableDropdownButtonComponent,
-        DateDropdownComponent,
+        DatesDropdownComponent,
         CustomDatePipe,
+        CustomFieldsQueryDropdownComponent,
       ],
       providers: [
         FilterPipe,
@@ -175,32 +228,60 @@ describe('FilterEditorComponent', () => {
           },
         },
         {
+          provide: CustomFieldsService,
+          useValue: {
+            listAll: () => of({ results: custom_fields }),
+          },
+        },
+        {
           provide: UserService,
           useValue: {
             listAll: () => of({ results: users }),
           },
         },
         SettingsService,
-      ],
-      imports: [
-        HttpClientTestingModule,
-        RouterTestingModule,
-        NgbDropdownModule,
-        FormsModule,
-        ReactiveFormsModule,
-        NgbDatepickerModule,
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
       ],
     }).compileComponents()
 
     documentService = TestBed.inject(DocumentService)
     settingsService = TestBed.inject(SettingsService)
     settingsService.currentUser = users[0]
+    permissionsService = TestBed.inject(PermissionsService)
+    searchService = TestBed.inject(SearchService)
+    jest
+      .spyOn(permissionsService, 'currentUserCan')
+      .mockImplementation((action, type) => {
+        // a little hack-ish, permissions filter dropdown causes reactive forms issue due to ng-select
+        // trying to apply formControlName
+        return type !== PermissionType.User
+      })
+    httpTestingController = TestBed.inject(HttpTestingController)
     fixture = TestBed.createComponent(FilterEditorComponent)
     component = fixture.componentInstance
     component.filterRules = []
     fixture.detectChanges()
     tick()
   }))
+
+  it('should not attempt to retrieve objects if user does not have permissions', () => {
+    jest.spyOn(permissionsService, 'currentUserCan').mockReset()
+    jest
+      .spyOn(permissionsService, 'currentUserCan')
+      .mockImplementation((action, type) => false)
+    component.ngOnInit()
+    httpTestingController.expectNone(`${environment.apiBaseUrl}documents/tags/`)
+    httpTestingController.expectNone(
+      `${environment.apiBaseUrl}documents/correspondents/`
+    )
+    httpTestingController.expectNone(
+      `${environment.apiBaseUrl}documents/document_types/`
+    )
+    httpTestingController.expectNone(
+      `${environment.apiBaseUrl}documents/storage_paths/`
+    )
+  })
 
   // SET filterRules
 
@@ -238,6 +319,18 @@ describe('FilterEditorComponent', () => {
     ]
     expect(component.textFilter).toEqual('foo')
     expect(component.textFilterTarget).toEqual('asn') // TEXT_FILTER_TARGET_ASN
+  }))
+
+  it('should ingest text filter rules for custom fields', fakeAsync(() => {
+    expect(component.textFilter).toEqual(null)
+    component.filterRules = [
+      {
+        rule_type: FILTER_CUSTOM_FIELDS_TEXT,
+        value: 'foo',
+      },
+    ]
+    expect(component.textFilter).toEqual('foo')
+    expect(component.textFilterTarget).toEqual('custom-fields') // TEXT_FILTER_TARGET_CUSTOM_FIELDS
   }))
 
   it('should ingest text filter rules for doc asn is null', fakeAsync(() => {
@@ -328,6 +421,28 @@ describe('FilterEditorComponent', () => {
     expect(component.textFilter).toBeNull()
   }))
 
+  it('should ingest text filter content with relative dates that are not in quick list', fakeAsync(() => {
+    expect(component.dateAddedRelativeDate).toBeNull()
+    component.filterRules = [
+      {
+        rule_type: FILTER_FULLTEXT_QUERY,
+        value: 'added:[-2 week to now]',
+      },
+    ]
+    expect(component.dateAddedRelativeDate).toBeNull()
+    expect(component.textFilter).toEqual('added:[-2 week to now]')
+
+    expect(component.dateCreatedRelativeDate).toBeNull()
+    component.filterRules = [
+      {
+        rule_type: FILTER_FULLTEXT_QUERY,
+        value: 'created:[-2 week to now]',
+      },
+    ]
+    expect(component.dateCreatedRelativeDate).toBeNull()
+    expect(component.textFilter).toEqual('created:[-2 week to now]')
+  }))
+
   it('should ingest text filter rules for more like', fakeAsync(() => {
     const moreLikeSpy = jest.spyOn(documentService, 'get')
     moreLikeSpy.mockReturnValue(of({ id: 1, title: 'Foo Bar' }))
@@ -341,7 +456,7 @@ describe('FilterEditorComponent', () => {
     expect(component.textFilterTarget).toEqual('fulltext-morelike') // TEXT_FILTER_TARGET_FULLTEXT_MORELIKE
     expect(moreLikeSpy).toHaveBeenCalledWith(1)
     expect(component.textFilter).toEqual('Foo Bar')
-    // we have to do this here because it cant be done by user input
+    // we have to do this here because it can't be done by user input
     expect(component.filterRules).toEqual([
       {
         rule_type: FILTER_FULLTEXT_MORELIKE,
@@ -731,6 +846,81 @@ describe('FilterEditorComponent', () => {
     ]
   }))
 
+  it('should ingest filter rules for custom fields all', fakeAsync(() => {
+    expect(component.customFieldQueriesModel.isEmpty()).toBeTruthy()
+    component.filterRules = [
+      {
+        rule_type: FILTER_HAS_CUSTOM_FIELDS_ALL,
+        value: '42,43',
+      },
+    ]
+    expect(component.customFieldQueriesModel.queries[0].operator).toEqual(
+      CustomFieldQueryLogicalOperator.And
+    )
+    expect(component.customFieldQueriesModel.queries[0].value.length).toEqual(2)
+    expect(
+      (
+        component.customFieldQueriesModel.queries[0]
+          .value[0] as CustomFieldQueryAtom
+      ).serialize()
+    ).toEqual(['42', CustomFieldQueryOperator.Exists, 'true'])
+  }))
+
+  it('should ingest filter rules for has any custom fields', fakeAsync(() => {
+    expect(component.customFieldQueriesModel.isEmpty()).toBeTruthy()
+    component.filterRules = [
+      {
+        rule_type: FILTER_HAS_CUSTOM_FIELDS_ANY,
+        value: '42,43',
+      },
+    ]
+    expect(component.customFieldQueriesModel.queries[0].operator).toEqual(
+      CustomFieldQueryLogicalOperator.Or
+    )
+    expect(component.customFieldQueriesModel.queries[0].value.length).toEqual(2)
+    expect(
+      (
+        component.customFieldQueriesModel.queries[0]
+          .value[0] as CustomFieldQueryAtom
+      ).serialize()
+    ).toEqual(['42', CustomFieldQueryOperator.Exists, 'true'])
+  }))
+
+  it('should ingest filter rules for custom field queries', fakeAsync(() => {
+    expect(component.customFieldQueriesModel.isEmpty()).toBeTruthy()
+    component.filterRules = [
+      {
+        rule_type: FILTER_CUSTOM_FIELDS_QUERY,
+        value: '["AND", [[42, "exists", "true"],[43, "exists", "true"]]]',
+      },
+    ]
+    expect(component.customFieldQueriesModel.queries[0].operator).toEqual(
+      CustomFieldQueryLogicalOperator.And
+    )
+    expect(component.customFieldQueriesModel.queries[0].value.length).toEqual(2)
+    expect(
+      (
+        component.customFieldQueriesModel.queries[0]
+          .value[0] as CustomFieldQueryAtom
+      ).serialize()
+    ).toEqual([42, CustomFieldQueryOperator.Exists, 'true'])
+
+    // atom
+    component.filterRules = [
+      {
+        rule_type: FILTER_CUSTOM_FIELDS_QUERY,
+        value: '[42, "exists", "true"]',
+      },
+    ]
+    expect(component.customFieldQueriesModel.queries[0].value.length).toEqual(1)
+    expect(
+      (
+        component.customFieldQueriesModel.queries[0]
+          .value[0] as CustomFieldQueryAtom
+      ).serialize()
+    ).toEqual([42, CustomFieldQueryOperator.Exists, 'true'])
+  }))
+
   it('should ingest filter rules for owner', fakeAsync(() => {
     expect(component.permissionsSelectionModel.ownerFilter).toEqual(
       OwnerFilterType.NONE
@@ -811,6 +1001,16 @@ describe('FilterEditorComponent', () => {
       },
     ]
     expect(component.permissionsSelectionModel.hideUnowned).toBeTruthy()
+  }))
+
+  it('should ingest filter rules for shared by me', fakeAsync(() => {
+    component.filterRules = [
+      {
+        rule_type: FILTER_SHARED_BY_USER,
+        value: '2',
+      },
+    ]
+    expect(component.permissionsSelectionModel.userID).toEqual(2)
   }))
 
   // GET filterRules
@@ -956,12 +1156,30 @@ describe('FilterEditorComponent', () => {
     ])
   }))
 
-  it('should convert user input to correct filter rules on full text query', fakeAsync(() => {
+  it('should convert user input to correct filter rules on custom fields query', fakeAsync(() => {
     component.textFilterInput.nativeElement.value = 'foo'
     component.textFilterInput.nativeElement.dispatchEvent(new Event('input'))
     const textFieldTargetDropdown = fixture.debugElement.queryAll(
       By.directive(NgbDropdownItem)
     )[3]
+    textFieldTargetDropdown.triggerEventHandler('click') // TEXT_FILTER_TARGET_CUSTOM_FIELDS
+    fixture.detectChanges()
+    tick(400)
+    expect(component.textFilterTarget).toEqual('custom-fields')
+    expect(component.filterRules).toEqual([
+      {
+        rule_type: FILTER_CUSTOM_FIELDS_TEXT,
+        value: 'foo',
+      },
+    ])
+  }))
+
+  it('should convert user input to correct filter rules on full text query', fakeAsync(() => {
+    component.textFilterInput.nativeElement.value = 'foo'
+    component.textFilterInput.nativeElement.dispatchEvent(new Event('input'))
+    const textFieldTargetDropdown = fixture.debugElement.queryAll(
+      By.directive(NgbDropdownItem)
+    )[4]
     textFieldTargetDropdown.triggerEventHandler('click') // TEXT_FILTER_TARGET_ASN
     fixture.detectChanges()
     tick(400)
@@ -982,7 +1200,7 @@ describe('FilterEditorComponent', () => {
     const tagButton = tagsFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )[0]
-    tagButton.triggerEventHandler('toggle')
+    tagButton.triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1000,8 +1218,8 @@ describe('FilterEditorComponent', () => {
     const tagButtons = tagsFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )
-    tagButtons[1].triggerEventHandler('toggle')
-    tagButtons[2].triggerEventHandler('toggle')
+    tagButtons[1].triggerEventHandler('toggled')
+    tagButtons[2].triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1051,8 +1269,8 @@ describe('FilterEditorComponent', () => {
     const correspondentButtons = correspondentsFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )
-    correspondentButtons[1].triggerEventHandler('toggle')
-    correspondentButtons[2].triggerEventHandler('toggle')
+    correspondentButtons[1].triggerEventHandler('toggled')
+    correspondentButtons[2].triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1090,7 +1308,7 @@ describe('FilterEditorComponent', () => {
     const notAssignedButton = correspondentsFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )[0]
-    notAssignedButton.triggerEventHandler('toggle')
+    notAssignedButton.triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1108,8 +1326,8 @@ describe('FilterEditorComponent', () => {
     const documentTypeButtons = documentTypesFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )
-    documentTypeButtons[1].triggerEventHandler('toggle')
-    documentTypeButtons[2].triggerEventHandler('toggle')
+    documentTypeButtons[1].triggerEventHandler('toggled')
+    documentTypeButtons[2].triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1147,7 +1365,7 @@ describe('FilterEditorComponent', () => {
     const notAssignedButton = docTypesFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )[0]
-    notAssignedButton.triggerEventHandler('toggle')
+    notAssignedButton.triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1165,8 +1383,8 @@ describe('FilterEditorComponent', () => {
     const storagePathButtons = storagePathFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )
-    storagePathButtons[1].triggerEventHandler('toggle')
-    storagePathButtons[2].triggerEventHandler('toggle')
+    storagePathButtons[1].triggerEventHandler('toggled')
+    storagePathButtons[2].triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1204,7 +1422,7 @@ describe('FilterEditorComponent', () => {
     const notAssignedButton = storagePathsFilterableDropdown.queryAll(
       By.directive(ToggleableDropdownButtonComponent)
     )[0]
-    notAssignedButton.triggerEventHandler('toggle')
+    notAssignedButton.triggerEventHandler('toggled')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
       {
@@ -1214,15 +1432,47 @@ describe('FilterEditorComponent', () => {
     ])
   }))
 
+  it('should convert user input to correct filter rules on custom field selections', fakeAsync(() => {
+    const customFieldsQueryDropdown = fixture.debugElement.queryAll(
+      By.directive(CustomFieldsQueryDropdownComponent)
+    )[0]
+    const customFieldToggleButton = customFieldsQueryDropdown.query(
+      By.css('button')
+    )
+    customFieldToggleButton.triggerEventHandler('click')
+    tick()
+    fixture.detectChanges()
+    const expression = component.customFieldQueriesModel
+      .queries[0] as CustomFieldQueryExpression
+    const atom = expression.value[0] as CustomFieldQueryAtom
+    atom.field = custom_fields[0].id
+    const fieldSelect: NgSelectComponent = customFieldsQueryDropdown.queryAll(
+      By.directive(NgSelectComponent)
+    )[0].componentInstance
+    fieldSelect.open()
+    const options = customFieldsQueryDropdown.queryAll(By.css('.ng-option'))
+    options[0].nativeElement.click()
+    expect(component.customFieldQueriesModel.queries[0].value.length).toEqual(1)
+    expect(component.filterRules).toEqual([
+      {
+        rule_type: FILTER_CUSTOM_FIELDS_QUERY,
+        value: JSON.stringify([
+          CustomFieldQueryLogicalOperator.Or,
+          [[custom_fields[0].id, 'exists', 'true']],
+        ]),
+      },
+    ])
+  }))
+
   it('should convert user input to correct filter rules on date created after', fakeAsync(() => {
     const dateCreatedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
+      By.directive(DatesDropdownComponent)
     )[0]
     const dateCreatedAfter = dateCreatedDropdown.queryAll(By.css('input'))[0]
 
     dateCreatedAfter.nativeElement.value = '05/14/2023'
     // dateCreatedAfter.triggerEventHandler('change')
-    // TODO: why isnt ngModel triggering this on change?
+    // TODO: why isn't ngModel triggering this on change?
     component.dateCreatedAfter = '2023-05-14'
     fixture.detectChanges()
     tick(400)
@@ -1236,13 +1486,13 @@ describe('FilterEditorComponent', () => {
 
   it('should convert user input to correct filter rules on date created before', fakeAsync(() => {
     const dateCreatedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
+      By.directive(DatesDropdownComponent)
     )[0]
     const dateCreatedBefore = dateCreatedDropdown.queryAll(By.css('input'))[1]
 
     dateCreatedBefore.nativeElement.value = '05/14/2023'
     // dateCreatedBefore.triggerEventHandler('change')
-    // TODO: why isnt ngModel triggering this on change?
+    // TODO: why isn't ngModel triggering this on change?
     component.dateCreatedBefore = '2023-05-14'
     fixture.detectChanges()
     tick(400)
@@ -1256,7 +1506,7 @@ describe('FilterEditorComponent', () => {
 
   it('should convert user input to correct filter rules on date created with relative date', fakeAsync(() => {
     const dateCreatedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
+      By.directive(DatesDropdownComponent)
     )[0]
     const dateCreatedBeforeRelativeButton = dateCreatedDropdown.queryAll(
       By.css('button')
@@ -1275,7 +1525,7 @@ describe('FilterEditorComponent', () => {
   it('should carry over text filtering on date created with relative date', fakeAsync(() => {
     component.textFilter = 'foo'
     const dateCreatedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
+      By.directive(DatesDropdownComponent)
     )[0]
     const dateCreatedBeforeRelativeButton = dateCreatedDropdown.queryAll(
       By.css('button')
@@ -1291,15 +1541,43 @@ describe('FilterEditorComponent', () => {
     ])
   }))
 
+  it('should leave relative dates not in quick list intact', fakeAsync(() => {
+    component.textFilterInput.nativeElement.value = 'created:[-2 week to now]'
+    component.textFilterInput.nativeElement.dispatchEvent(new Event('input'))
+    const textFieldTargetDropdown = fixture.debugElement.queryAll(
+      By.directive(NgbDropdownItem)
+    )[4]
+    textFieldTargetDropdown.triggerEventHandler('click')
+    fixture.detectChanges()
+    tick(400)
+    expect(component.filterRules).toEqual([
+      {
+        rule_type: FILTER_FULLTEXT_QUERY,
+        value: 'created:[-2 week to now]',
+      },
+    ])
+
+    component.textFilterInput.nativeElement.value = 'added:[-2 month to now]'
+    component.textFilterInput.nativeElement.dispatchEvent(new Event('input'))
+    fixture.detectChanges()
+    tick(400)
+    expect(component.filterRules).toEqual([
+      {
+        rule_type: FILTER_FULLTEXT_QUERY,
+        value: 'added:[-2 month to now]',
+      },
+    ])
+  }))
+
   it('should convert user input to correct filter rules on date added after', fakeAsync(() => {
-    const dateAddedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
-    )[1]
-    const dateAddedAfter = dateAddedDropdown.queryAll(By.css('input'))[0]
+    const datesDropdown = fixture.debugElement.query(
+      By.directive(DatesDropdownComponent)
+    )
+    const dateAddedAfter = datesDropdown.queryAll(By.css('input'))[2]
 
     dateAddedAfter.nativeElement.value = '05/14/2023'
     // dateAddedAfter.triggerEventHandler('change')
-    // TODO: why isnt ngModel triggering this on change?
+    // TODO: why isn't ngModel triggering this on change?
     component.dateAddedAfter = '2023-05-14'
     fixture.detectChanges()
     tick(400)
@@ -1312,14 +1590,14 @@ describe('FilterEditorComponent', () => {
   }))
 
   it('should convert user input to correct filter rules on date added before', fakeAsync(() => {
-    const dateAddedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
-    )[1]
-    const dateAddedBefore = dateAddedDropdown.queryAll(By.css('input'))[1]
+    const datesDropdown = fixture.debugElement.query(
+      By.directive(DatesDropdownComponent)
+    )
+    const dateAddedBefore = datesDropdown.queryAll(By.css('input'))[2]
 
     dateAddedBefore.nativeElement.value = '05/14/2023'
     // dateAddedBefore.triggerEventHandler('change')
-    // TODO: why isnt ngModel triggering this on change?
+    // TODO: why isn't ngModel triggering this on change?
     component.dateAddedBefore = '2023-05-14'
     fixture.detectChanges()
     tick(400)
@@ -1332,38 +1610,38 @@ describe('FilterEditorComponent', () => {
   }))
 
   it('should convert user input to correct filter rules on date added with relative date', fakeAsync(() => {
-    const dateAddedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
-    )[1]
-    const dateAddedBeforeRelativeButton = dateAddedDropdown.queryAll(
+    const datesDropdown = fixture.debugElement.query(
+      By.directive(DatesDropdownComponent)
+    )
+    const dateCreatedBeforeRelativeButton = datesDropdown.queryAll(
       By.css('button')
     )[1]
-    dateAddedBeforeRelativeButton.triggerEventHandler('click')
+    dateCreatedBeforeRelativeButton.triggerEventHandler('click')
     fixture.detectChanges()
     tick(400)
     expect(component.filterRules).toEqual([
       {
         rule_type: FILTER_FULLTEXT_QUERY,
-        value: 'added:[-1 week to now]',
+        value: 'created:[-1 week to now]',
       },
     ])
   }))
 
   it('should carry over text filtering on date added with relative date', fakeAsync(() => {
     component.textFilter = 'foo'
-    const dateAddedDropdown = fixture.debugElement.queryAll(
-      By.directive(DateDropdownComponent)
-    )[1]
-    const dateAddedBeforeRelativeButton = dateAddedDropdown.queryAll(
+    const datesDropdown = fixture.debugElement.query(
+      By.directive(DatesDropdownComponent)
+    )
+    const dateCreatedBeforeRelativeButton = datesDropdown.queryAll(
       By.css('button')
     )[1]
-    dateAddedBeforeRelativeButton.triggerEventHandler('click')
+    dateCreatedBeforeRelativeButton.triggerEventHandler('click')
     fixture.detectChanges()
     tick(400)
     expect(component.filterRules).toEqual([
       {
         rule_type: FILTER_FULLTEXT_QUERY,
-        value: 'foo,added:[-1 week to now]',
+        value: 'foo,created:[-1 week to now]',
       },
     ])
   }))
@@ -1422,11 +1700,26 @@ describe('FilterEditorComponent', () => {
     ])
   }))
 
-  it('should convert user input to correct filter on permissions select unowned', fakeAsync(() => {
+  it('should convert user input to correct filter on permissions select shared by me', fakeAsync(() => {
     const permissionsDropdown = fixture.debugElement.query(
       By.directive(PermissionsFilterDropdownComponent)
     )
     const unownedButton = permissionsDropdown.queryAll(By.css('button'))[4]
+    unownedButton.triggerEventHandler('click')
+    fixture.detectChanges()
+    expect(component.filterRules).toEqual([
+      {
+        rule_type: FILTER_SHARED_BY_USER,
+        value: '1',
+      },
+    ])
+  }))
+
+  it('should convert user input to correct filter on permissions select unowned', fakeAsync(() => {
+    const permissionsDropdown = fixture.debugElement.query(
+      By.directive(PermissionsFilterDropdownComponent)
+    )
+    const unownedButton = permissionsDropdown.queryAll(By.css('button'))[5]
     unownedButton.triggerEventHandler('click')
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
@@ -1467,7 +1760,7 @@ describe('FilterEditorComponent', () => {
     )
     ownerToggle.nativeElement.checked = true
     // ownerToggle.triggerEventHandler('change')
-    // TODO: ngModel isnt doing this here
+    // TODO: ngModel isn't doing this here
     component.permissionsSelectionModel.hideUnowned = true
     fixture.detectChanges()
     expect(component.filterRules).toEqual([
@@ -1498,6 +1791,10 @@ describe('FilterEditorComponent', () => {
       selected_document_types: [
         { id: 32, document_count: 1 },
         { id: 33, document_count: 0 },
+      ],
+      selected_custom_fields: [
+        { id: 42, document_count: 1 },
+        { id: 43, document_count: 0 },
       ],
     }
   })
@@ -1572,6 +1869,14 @@ describe('FilterEditorComponent', () => {
       },
     ]
     expect(component.generateFilterName()).toEqual('Without any tag')
+
+    component.filterRules = [
+      {
+        rule_type: FILTER_CUSTOM_FIELDS_QUERY,
+        value: '["AND",[["42","exists","true"],["43","exists","true"]]]',
+      },
+    ]
+    expect(component.generateFilterName()).toEqual(`Custom fields query`)
 
     component.filterRules = [
       {
@@ -1668,5 +1973,55 @@ describe('FilterEditorComponent', () => {
       new KeyboardEvent('keyup', { key: 'Escape' })
     )
     expect(component.textFilter).toEqual('')
+    const blurSpy = jest.spyOn(component.textFilterInput.nativeElement, 'blur')
+    component.textFilterInput.nativeElement.dispatchEvent(
+      new KeyboardEvent('keyup', { key: 'Escape' })
+    )
+    expect(blurSpy).toHaveBeenCalled()
+  })
+
+  it('should adjust text filter targets if more like search', () => {
+    const TEXT_FILTER_TARGET_FULLTEXT_MORELIKE = 'fulltext-morelike' // private const
+    component.textFilterTarget = TEXT_FILTER_TARGET_FULLTEXT_MORELIKE
+    expect(component.textFilterTargets).toContainEqual({
+      id: TEXT_FILTER_TARGET_FULLTEXT_MORELIKE,
+      name: $localize`More like`,
+    })
+  })
+
+  it('should call autocomplete endpoint on input', fakeAsync(() => {
+    component.textFilterTarget = 'fulltext-query' // TEXT_FILTER_TARGET_FULLTEXT_QUERY
+    const autocompleteSpy = jest.spyOn(searchService, 'autocomplete')
+    component.searchAutoComplete(of('hello')).subscribe()
+    tick(250)
+    expect(autocompleteSpy).toHaveBeenCalled()
+
+    component.searchAutoComplete(of('hello world 1')).subscribe()
+    tick(250)
+    expect(autocompleteSpy).toHaveBeenCalled()
+  }))
+
+  it('should handle autocomplete backend failure gracefully', fakeAsync(() => {
+    component.textFilterTarget = 'fulltext-query' // TEXT_FILTER_TARGET_FULLTEXT_QUERY
+    const serviceAutocompleteSpy = jest.spyOn(searchService, 'autocomplete')
+    serviceAutocompleteSpy.mockReturnValue(
+      throwError(() => new Error('autcomplete failed'))
+    )
+    // serviceAutocompleteSpy.mockReturnValue(of([' world']))
+    let result
+    component.searchAutoComplete(of('hello')).subscribe((res) => {
+      result = res
+    })
+    tick(250)
+    expect(serviceAutocompleteSpy).toHaveBeenCalled()
+    expect(result).toEqual([])
+  }))
+
+  it('should support choosing a autocomplete item', () => {
+    expect(component.textFilter).toBeNull()
+    component.itemSelected({ item: 'hello', preventDefault: () => true })
+    expect(component.textFilter).toEqual('hello ')
+    component.itemSelected({ item: 'world', preventDefault: () => true })
+    expect(component.textFilter).toEqual('hello world ')
   })
 })

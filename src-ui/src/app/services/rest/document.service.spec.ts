@@ -1,16 +1,30 @@
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
 import {
-  HttpClientTestingModule,
   HttpTestingController,
+  provideHttpClientTesting,
 } from '@angular/common/http/testing'
-import { Subscription } from 'rxjs'
 import { TestBed } from '@angular/core/testing'
-import { environment } from 'src/environments/environment'
-import { DocumentService } from './document.service'
+import { of, Subscription } from 'rxjs'
+import { CustomFieldDataType } from 'src/app/data/custom-field'
+import {
+  DOCUMENT_SORT_FIELDS,
+  DOCUMENT_SORT_FIELDS_FULLTEXT,
+} from 'src/app/data/document'
 import { FILTER_TITLE } from 'src/app/data/filter-rule-type'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { environment } from 'src/environments/environment'
+import { PermissionsService } from '../permissions.service'
+import { SettingsService } from '../settings.service'
+import { CustomFieldsService } from './custom-fields.service'
+import { DocumentService } from './document.service'
 
 let httpTestingController: HttpTestingController
 let service: DocumentService
 let subscription: Subscription
+let settingsService: SettingsService
+let permissionsService: PermissionsService
+let customFieldsService: CustomFieldsService
+
 const endpoint = 'documents'
 const documents = [
   {
@@ -33,6 +47,42 @@ const documents = [
     content: 'some content',
   },
 ]
+
+beforeEach(() => {
+  TestBed.configureTestingModule({
+    imports: [],
+    providers: [
+      DocumentService,
+      provideHttpClient(withInterceptorsFromDi()),
+      provideHttpClientTesting(),
+    ],
+  })
+
+  httpTestingController = TestBed.inject(HttpTestingController)
+  settingsService = TestBed.inject(SettingsService)
+  customFieldsService = TestBed.inject(CustomFieldsService)
+  permissionsService = TestBed.inject(PermissionsService)
+  jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
+  jest.spyOn(customFieldsService, 'listAll').mockReturnValue(
+    of({
+      all: [1, 2, 3],
+      count: 3,
+      results: [
+        {
+          id: 1,
+          name: 'Custom Field 1',
+          data_type: CustomFieldDataType.String,
+        },
+        {
+          id: 2,
+          name: 'Custom Field 2',
+          data_type: CustomFieldDataType.Integer,
+        },
+      ],
+    })
+  )
+  service = TestBed.inject(DocumentService)
+})
 
 describe(`DocumentService`, () => {
   // common tests e.g. commonAbstractPaperlessServiceTests differ slightly
@@ -201,44 +251,108 @@ describe(`DocumentService`, () => {
     )
   })
 
-  it('should add observables to document', () => {
-    subscription = service
-      .listFiltered(1, 25, 'title', false, [])
-      .subscribe((result) => {
-        expect(result.results).toHaveLength(3)
-        const doc = result.results[0]
-        expect(doc.correspondent$).not.toBeNull()
-        expect(doc.document_type$).not.toBeNull()
-        expect(doc.tags$).not.toBeNull()
-        expect(doc.storage_path$).not.toBeNull()
-      })
-    httpTestingController
-      .expectOne(
-        `${environment.apiBaseUrl}${endpoint}/?page=1&page_size=25&ordering=title`
-      )
-      .flush({
-        results: documents,
-      })
-  })
-
   it('should set search query', () => {
     const searchQuery = 'hello'
     service.searchQuery = searchQuery
     let url = service.getPreviewUrl(documents[0].id)
     expect(url).toEqual(
-      `${environment.apiBaseUrl}${endpoint}/${documents[0].id}/preview/#search="${searchQuery}"`
+      `${environment.apiBaseUrl}${endpoint}/${documents[0].id}/preview/#search=%22${searchQuery}%22`
+    )
+  })
+
+  it('should support get next asn', () => {
+    subscription = service.getNextAsn().subscribe((asn) => asn)
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/next_asn/`
+    )
+    expect(req.request.method).toEqual('GET')
+  })
+
+  it('should pass remove_inbox_tags setting to update', () => {
+    subscription = service.update(documents[0]).subscribe()
+    let req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/${documents[0].id}/`
+    )
+    expect(req.request.body.remove_inbox_tags).toEqual(false)
+
+    settingsService.set(SETTINGS_KEYS.DOCUMENT_EDITING_REMOVE_INBOX_TAGS, true)
+    subscription = service.update(documents[0]).subscribe()
+    req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/${documents[0].id}/`
+    )
+    expect(req.request.body.remove_inbox_tags).toEqual(true)
+  })
+
+  it('should call appropriate api endpoint for getting audit log', () => {
+    subscription = service.getHistory(documents[0].id).subscribe()
+    const req = httpTestingController.expectOne(
+      `${environment.apiBaseUrl}${endpoint}/${documents[0].id}/history/`
     )
   })
 })
 
-beforeEach(() => {
-  TestBed.configureTestingModule({
-    providers: [DocumentService],
-    imports: [HttpClientTestingModule],
-  })
+it('should construct sort fields respecting permissions', () => {
+  expect(
+    service.sortFields.find((f) => f.field === 'correspondent__name')
+  ).not.toBeUndefined()
+  expect(
+    service.sortFields.find((f) => f.field === 'document_type__name')
+  ).not.toBeUndefined()
+  expect(
+    service.sortFields.find((f) => f.field === 'owner')
+  ).not.toBeUndefined()
 
-  httpTestingController = TestBed.inject(HttpTestingController)
-  service = TestBed.inject(DocumentService)
+  jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(false)
+  service['setupSortFields']()
+  const fields = DOCUMENT_SORT_FIELDS.filter(
+    (f) =>
+      ['correspondent__name', 'document_type__name', 'owner'].indexOf(
+        f.field
+      ) === -1
+  )
+  expect(service.sortFields).toEqual(fields)
+  expect(service.sortFieldsFullText).toEqual([
+    ...fields,
+    ...DOCUMENT_SORT_FIELDS_FULLTEXT,
+  ])
+
+  settingsService.set(SETTINGS_KEYS.NOTES_ENABLED, false)
+  service['setupSortFields']()
+  expect(
+    service.sortFields.find((f) => f.field === 'num_notes')
+  ).toBeUndefined()
+})
+
+it('should include custom fields in sort fields if user has permission', () => {
+  const permissionsService: PermissionsService =
+    TestBed.inject(PermissionsService)
+  jest.spyOn(permissionsService, 'currentUserCan').mockReturnValue(true)
+
+  service['customFields'] = [
+    {
+      id: 1,
+      name: 'Custom Field 1',
+      data_type: CustomFieldDataType.String,
+    },
+    {
+      id: 2,
+      name: 'Custom Field 2',
+      data_type: CustomFieldDataType.Integer,
+    },
+  ]
+
+  service['setupSortFields']()
+  expect(service.sortFields).toEqual([
+    ...DOCUMENT_SORT_FIELDS,
+    {
+      field: 'custom_field_1',
+      name: 'Custom Field 1',
+    },
+    {
+      field: 'custom_field_2',
+      name: 'Custom Field 2',
+    },
+  ])
 })
 
 afterEach(() => {

@@ -1,12 +1,15 @@
 import logging
 import math
-import os
 from collections import Counter
 from contextlib import contextmanager
+from datetime import datetime
+from datetime import timezone
+from shutil import rmtree
+from typing import Literal
 
-from dateutil.parser import isoparse
 from django.conf import settings
-from django.utils import timezone
+from django.db.models import QuerySet
+from django.utils import timezone as django_timezone
 from guardian.shortcuts import get_users_with_perms
 from whoosh import classify
 from whoosh import highlight
@@ -18,6 +21,8 @@ from whoosh.fields import NUMERIC
 from whoosh.fields import TEXT
 from whoosh.fields import Schema
 from whoosh.highlight import HtmlFormatter
+from whoosh.idsets import BitSet
+from whoosh.idsets import DocIdSet
 from whoosh.index import FileIndex
 from whoosh.index import create_in
 from whoosh.index import exists_in
@@ -25,11 +30,16 @@ from whoosh.index import open_dir
 from whoosh.qparser import MultifieldParser
 from whoosh.qparser import QueryParser
 from whoosh.qparser.dateparse import DateParserPlugin
+from whoosh.qparser.dateparse import English
+from whoosh.qparser.plugins import FieldsPlugin
+from whoosh.reading import IndexReader
 from whoosh.scoring import TF_IDF
 from whoosh.searching import ResultsPage
 from whoosh.searching import Searcher
+from whoosh.util.times import timespan
 from whoosh.writing import AsyncWriter
 
+from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import Note
 from documents.models import User
@@ -37,7 +47,7 @@ from documents.models import User
 logger = logging.getLogger("paperless.index")
 
 
-def get_schema():
+def get_schema() -> Schema:
     return Schema(
         id=NUMERIC(stored=True, unique=True),
         title=TEXT(sortable=True),
@@ -60,29 +70,38 @@ def get_schema():
         has_path=BOOLEAN(),
         notes=TEXT(),
         num_notes=NUMERIC(sortable=True, signed=False),
+        custom_fields=TEXT(),
+        custom_field_count=NUMERIC(sortable=True, signed=False),
+        has_custom_fields=BOOLEAN(),
+        custom_fields_id=KEYWORD(commas=True),
         owner=TEXT(),
         owner_id=NUMERIC(),
         has_owner=BOOLEAN(),
         viewer_id=KEYWORD(commas=True),
         checksum=TEXT(),
+        page_count=NUMERIC(sortable=True),
         original_filename=TEXT(sortable=True),
+        is_shared=BOOLEAN(),
     )
 
 
-def open_index(recreate=False):
+def open_index(recreate=False) -> FileIndex:
     try:
         if exists_in(settings.INDEX_DIR) and not recreate:
             return open_dir(settings.INDEX_DIR, schema=get_schema())
     except Exception:
         logger.exception("Error while opening the index, recreating.")
 
-    if not os.path.isdir(settings.INDEX_DIR):
-        os.makedirs(settings.INDEX_DIR, exist_ok=True)
+    # create_in doesn't handle corrupted indexes very well, remove the directory entirely first
+    if settings.INDEX_DIR.is_dir():
+        rmtree(settings.INDEX_DIR)
+    settings.INDEX_DIR.mkdir(parents=True, exist_ok=True)
+
     return create_in(settings.INDEX_DIR, get_schema())
 
 
 @contextmanager
-def open_index_writer(optimize=False):
+def open_index_writer(optimize=False) -> AsyncWriter:
     writer = AsyncWriter(open_index())
 
     try:
@@ -95,7 +114,7 @@ def open_index_writer(optimize=False):
 
 
 @contextmanager
-def open_index_searcher():
+def open_index_searcher() -> Searcher:
     searcher = open_index().searcher()
 
     try:
@@ -104,11 +123,17 @@ def open_index_searcher():
         searcher.close()
 
 
-def update_document(writer: AsyncWriter, doc: Document):
+def update_document(writer: AsyncWriter, doc: Document) -> None:
     tags = ",".join([t.name for t in doc.tags.all()])
     tags_ids = ",".join([str(t.id) for t in doc.tags.all()])
     notes = ",".join([str(c.note) for c in Note.objects.filter(document=doc)])
-    asn = doc.archive_serial_number
+    custom_fields = ",".join(
+        [str(c) for c in CustomFieldInstance.objects.filter(document=doc)],
+    )
+    custom_fields_ids = ",".join(
+        [str(f.field.id) for f in CustomFieldInstance.objects.filter(document=doc)],
+    )
+    asn: int | None = doc.archive_serial_number
     if asn is not None and (
         asn < Document.ARCHIVE_SERIAL_NUMBER_MIN
         or asn > Document.ARCHIVE_SERIAL_NUMBER_MAX
@@ -124,7 +149,7 @@ def update_document(writer: AsyncWriter, doc: Document):
         doc,
         only_with_perms_in=["view_document"],
     )
-    viewer_ids = ",".join([str(u.id) for u in users_with_perms])
+    viewer_ids: str = ",".join([str(u.id) for u in users_with_perms])
     writer.update_document(
         id=doc.pk,
         title=doc.title,
@@ -147,134 +172,73 @@ def update_document(writer: AsyncWriter, doc: Document):
         has_path=doc.storage_path is not None,
         notes=notes,
         num_notes=len(notes),
+        custom_fields=custom_fields,
+        custom_field_count=len(doc.custom_fields.all()),
+        has_custom_fields=len(custom_fields) > 0,
+        custom_fields_id=custom_fields_ids if custom_fields_ids else None,
         owner=doc.owner.username if doc.owner else None,
         owner_id=doc.owner.id if doc.owner else None,
         has_owner=doc.owner is not None,
         viewer_id=viewer_ids if viewer_ids else None,
         checksum=doc.checksum,
+        page_count=doc.page_count,
         original_filename=doc.original_filename,
+        is_shared=len(viewer_ids) > 0,
     )
 
 
-def remove_document(writer, doc):
+def remove_document(writer: AsyncWriter, doc: Document) -> None:
     remove_document_by_id(writer, doc.pk)
 
 
-def remove_document_by_id(writer, doc_id):
+def remove_document_by_id(writer: AsyncWriter, doc_id) -> None:
     writer.delete_by_term("id", doc_id)
 
 
-def add_or_update_document(document):
+def add_or_update_document(document: Document) -> None:
     with open_index_writer() as writer:
         update_document(writer, document)
 
 
-def remove_document_from_index(document):
+def remove_document_from_index(document: Document) -> None:
     with open_index_writer() as writer:
         remove_document(writer, document)
 
 
+class MappedDocIdSet(DocIdSet):
+    """
+    A DocIdSet backed by a set of `Document` IDs.
+    Supports efficiently looking up if a whoosh docnum is in the provided `filter_queryset`.
+    """
+
+    def __init__(self, filter_queryset: QuerySet, ixreader: IndexReader) -> None:
+        super().__init__()
+        document_ids = filter_queryset.order_by("id").values_list("id", flat=True)
+        max_id = document_ids.last() or 0
+        self.document_ids = BitSet(document_ids, size=max_id)
+        self.ixreader = ixreader
+
+    def __contains__(self, docnum) -> bool:
+        document_id = self.ixreader.stored_fields(docnum)["id"]
+        return document_id in self.document_ids
+
+    def __bool__(self) -> Literal[True]:
+        # searcher.search ignores a filter if it's "falsy".
+        # We use this hack so this DocIdSet, when used as a filter, is never ignored.
+        return True
+
+
 class DelayedQuery:
-    param_map = {
-        "correspondent": ("correspondent", ["id", "id__in", "id__none", "isnull"]),
-        "document_type": ("type", ["id", "id__in", "id__none", "isnull"]),
-        "storage_path": ("path", ["id", "id__in", "id__none", "isnull"]),
-        "owner": ("owner", ["id", "id__in", "id__none", "isnull"]),
-        "tags": ("tag", ["id__all", "id__in", "id__none"]),
-        "added": ("added", ["date__lt", "date__gt"]),
-        "created": ("created", ["date__lt", "date__gt"]),
-        "checksum": ("checksum", ["icontains", "istartswith"]),
-        "original_filename": ("original_filename", ["icontains", "istartswith"]),
-    }
-
     def _get_query(self):
-        raise NotImplementedError
+        raise NotImplementedError  # pragma: no cover
 
-    def _get_query_filter(self):
-        criterias = []
-        for key, value in self.query_params.items():
-            # is_tagged is a special case
-            if key == "is_tagged":
-                criterias.append(query.Term("has_tag", self.evalBoolean(value)))
-                continue
-
-            # Don't process query params without a filter
-            if "__" not in key:
-                continue
-
-            # All other query params consist of a parameter and a query filter
-            param, query_filter = key.split("__", 1)
-            try:
-                field, supported_query_filters = self.param_map[param]
-            except KeyError:
-                logger.error(f"Unable to build a query filter for parameter {key}")
-                continue
-
-            # We only support certain filters per parameter
-            if query_filter not in supported_query_filters:
-                logger.info(
-                    f"Query filter {query_filter} not supported for parameter {param}",
-                )
-                continue
-
-            if query_filter == "id":
-                criterias.append(query.Term(f"{field}_id", value))
-            elif query_filter == "id__in":
-                in_filter = []
-                for object_id in value.split(","):
-                    in_filter.append(
-                        query.Term(f"{field}_id", object_id),
-                    )
-                criterias.append(query.Or(in_filter))
-            elif query_filter == "id__none":
-                for object_id in value.split(","):
-                    criterias.append(
-                        query.Not(query.Term(f"{field}_id", object_id)),
-                    )
-            elif query_filter == "isnull":
-                criterias.append(
-                    query.Term(f"has_{field}", self.evalBoolean(value) is False),
-                )
-            elif query_filter == "id__all":
-                for object_id in value.split(","):
-                    criterias.append(query.Term(f"{field}_id", object_id))
-            elif query_filter == "date__lt":
-                criterias.append(
-                    query.DateRange(field, start=None, end=isoparse(value)),
-                )
-            elif query_filter == "date__gt":
-                criterias.append(
-                    query.DateRange(field, start=isoparse(value), end=None),
-                )
-            elif query_filter == "icontains":
-                criterias.append(
-                    query.Term(field, value),
-                )
-            elif query_filter == "istartswith":
-                criterias.append(
-                    query.Prefix(field, value),
-                )
-
-        user_criterias = get_permissions_criterias(
-            user=self.user,
-        )
-        if len(criterias) > 0:
-            if len(user_criterias) > 0:
-                criterias.append(query.Or(user_criterias))
-            return query.And(criterias)
-        else:
-            return query.Or(user_criterias) if len(user_criterias) > 0 else None
-
-    def evalBoolean(self, val):
-        return val.lower() in {"true", "1"}
-
-    def _get_query_sortedby(self):
+    def _get_query_sortedby(self) -> tuple[None, Literal[False]] | tuple[str, bool]:
         if "ordering" not in self.query_params:
             return None, False
 
         field: str = self.query_params["ordering"]
 
-        sort_fields_map = {
+        sort_fields_map: dict[str, str] = {
             "created": "created",
             "modified": "modified",
             "added": "added",
@@ -284,6 +248,7 @@ class DelayedQuery:
             "archive_serial_number": "asn",
             "num_notes": "num_notes",
             "owner": "owner",
+            "page_count": "page_count",
         }
 
         if field.startswith("-"):
@@ -297,15 +262,21 @@ class DelayedQuery:
         else:
             return sort_fields_map[field], reverse
 
-    def __init__(self, searcher: Searcher, query_params, page_size, user):
+    def __init__(
+        self,
+        searcher: Searcher,
+        query_params,
+        page_size,
+        filter_queryset: QuerySet,
+    ) -> None:
         self.searcher = searcher
         self.query_params = query_params
         self.page_size = page_size
         self.saved_results = dict()
         self.first_score = None
-        self.user = user
+        self.filter_queryset = filter_queryset
 
-    def __len__(self):
+    def __len__(self) -> int:
         page = self[0:1]
         return len(page)
 
@@ -319,7 +290,7 @@ class DelayedQuery:
         page: ResultsPage = self.searcher.search_page(
             q,
             mask=mask,
-            filter=self._get_query_filter(),
+            filter=MappedDocIdSet(self.filter_queryset, self.searcher.ixreader),
             pagenum=math.floor(item.start / self.page_size) + 1,
             pagelen=self.page_size,
             sortedby=sortedby,
@@ -346,14 +317,43 @@ class DelayedQuery:
         return page
 
 
+class LocalDateParser(English):
+    def reverse_timezone_offset(self, d):
+        return (d.replace(tzinfo=django_timezone.get_current_timezone())).astimezone(
+            timezone.utc,
+        )
+
+    def date_from(self, *args, **kwargs):
+        d = super().date_from(*args, **kwargs)
+        if isinstance(d, timespan):
+            d.start = self.reverse_timezone_offset(d.start)
+            d.end = self.reverse_timezone_offset(d.end)
+        elif isinstance(d, datetime):
+            d = self.reverse_timezone_offset(d)
+        return d
+
+
 class DelayedFullTextQuery(DelayedQuery):
-    def _get_query(self):
+    def _get_query(self) -> tuple:
         q_str = self.query_params["query"]
         qp = MultifieldParser(
-            ["content", "title", "correspondent", "tag", "type", "notes"],
+            [
+                "content",
+                "title",
+                "correspondent",
+                "tag",
+                "type",
+                "notes",
+                "custom_fields",
+            ],
             self.searcher.ixreader.schema,
         )
-        qp.add_plugin(DateParserPlugin(basedate=timezone.now()))
+        qp.add_plugin(
+            DateParserPlugin(
+                basedate=django_timezone.now(),
+                dateparser=LocalDateParser(),
+            ),
+        )
         q = qp.parse(q_str)
 
         corrected = self.searcher.correct_query(q, q_str)
@@ -364,7 +364,7 @@ class DelayedFullTextQuery(DelayedQuery):
 
 
 class DelayedMoreLikeThisQuery(DelayedQuery):
-    def _get_query(self):
+    def _get_query(self) -> tuple:
         more_like_doc_id = int(self.query_params["more_like_id"])
         content = Document.objects.get(id=more_like_doc_id).content
 
@@ -379,12 +379,17 @@ class DelayedMoreLikeThisQuery(DelayedQuery):
         q = query.Or(
             [query.Term("content", word, boost=weight) for word, weight in kts],
         )
-        mask = {docnum}
+        mask: set = {docnum}
 
         return q, mask
 
 
-def autocomplete(ix: FileIndex, term: str, limit: int = 10, user: User = None):
+def autocomplete(
+    ix: FileIndex,
+    term: str,
+    limit: int = 10,
+    user: User | None = None,
+) -> list:
     """
     Mimics whoosh.reading.IndexReader.most_distinctive_terms with permissions
     and without scoring
@@ -393,8 +398,11 @@ def autocomplete(ix: FileIndex, term: str, limit: int = 10, user: User = None):
 
     with ix.searcher(weighting=TF_IDF()) as s:
         qp = QueryParser("content", schema=ix.schema)
+        # Don't let searches with a query that happen to match a field override the
+        # content field query instead and return bogus, not text data
+        qp.remove_plugin_class(FieldsPlugin)
         q = qp.parse(f"{term.lower()}*")
-        user_criterias = get_permissions_criterias(user)
+        user_criterias: list = get_permissions_criterias(user)
 
         results = s.search(
             q,
@@ -405,14 +413,18 @@ def autocomplete(ix: FileIndex, term: str, limit: int = 10, user: User = None):
         termCounts = Counter()
         if results.has_matched_terms():
             for hit in results:
-                for _, term in hit.matched_terms():
-                    termCounts[term] += 1
+                for _, match in hit.matched_terms():
+                    termCounts[match] += 1
             terms = [t for t, _ in termCounts.most_common(limit)]
+
+        term_encoded: bytes = term.encode("UTF-8")
+        if term_encoded in terms:
+            terms.insert(0, terms.pop(terms.index(term_encoded)))
 
     return terms
 
 
-def get_permissions_criterias(user: User = None):
+def get_permissions_criterias(user: User | None = None) -> list:
     user_criterias = [query.Term("has_owner", False)]
     if user is not None:
         if user.is_superuser:  # superusers see all docs

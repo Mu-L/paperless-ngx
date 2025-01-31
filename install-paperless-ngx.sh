@@ -38,7 +38,6 @@ ask_docker_folder() {
 			echo "Invalid folder: $result"
 		fi
 
-
 	done
 }
 
@@ -57,14 +56,9 @@ if ! command -v docker &> /dev/null ; then
 	exit 1
 fi
 
-DOCKER_COMPOSE_CMD="docker-compose"
-if ! command -v ${DOCKER_COMPOSE_CMD} ; then
-	if docker compose version &> /dev/null ; then
-		DOCKER_COMPOSE_CMD="docker compose"
-	else
-		echo "docker-compose executable not found. Is docker-compose installed?"
-		exit 1
-	fi
+if ! docker compose &> /dev/null ; then
+	echo "docker compose plugin not found. Is docker compose installed?"
+	exit 1
 fi
 
 # Check if user has permissions to run Docker by trying to get the status of Docker (docker status).
@@ -72,12 +66,22 @@ fi
 if ! docker stats --no-stream &> /dev/null ; then
 	echo ""
 	echo "WARN: It look like the current user does not have Docker permissions."
-	echo "WARN: Use 'sudo usermod -aG docker $USER' to assign Docker permissions to the user."
+	echo "WARN: Use 'sudo usermod -aG docker $USER' to assign Docker permissions to the user (may require restarting shell)."
 	echo ""
 	sleep 3
 fi
 
-default_time_zone=$(timedatectl show -p Timezone --value)
+# Added handling for timezone for busybox based linux, not having timedatectl available (i.e. QNAP QTS)
+# if neither timedatectl nor /etc/TZ is succeeding, defaulting to GMT.
+if  command -v timedatectl &> /dev/null ; then
+	default_time_zone=$(timedatectl show -p Timezone --value)
+elif [ -f /etc/TZ ] && [ -f /etc/tzlist ] ; then
+	TZ=$(cat /etc/TZ)
+	default_time_zone=$(grep -B 1 -m 1 "$TZ" /etc/tzlist | head -1 | cut -f 2 -d =)
+else
+	echo "WARN: unable to detect timezone, defaulting to Etc/UTC"
+	default_time_zone="Etc/UTC"
+fi
 
 set -e
 
@@ -321,12 +325,18 @@ fi
 wget "https://raw.githubusercontent.com/paperless-ngx/paperless-ngx/main/docker/compose/docker-compose.$DOCKER_COMPOSE_VERSION.yml" -O docker-compose.yml
 wget "https://raw.githubusercontent.com/paperless-ngx/paperless-ngx/main/docker/compose/.env" -O .env
 
-SECRET_KEY=$(tr --delete --complement 'a-zA-Z0-9' < /dev/urandom 2>/dev/null | head --bytes 64)
+SECRET_KEY=$(LC_ALL=C tr -dc 'a-zA-Z0-9!#$%&()*+,-./:;<=>?@[\]^_`{|}~' < /dev/urandom | dd bs=1 count=64 2>/dev/null)
+
 
 DEFAULT_LANGUAGES=("deu eng fra ita spa")
 
-_split_langs="${OCR_LANGUAGE//+/ }"
-read -r -a OCR_LANGUAGES_ARRAY <<< "${_split_langs}"
+# OCR_LANG requires underscores, replace dashes if the user gave them with underscores
+readonly ocr_langs=${OCR_LANGUAGE//-/_}
+# OCR_LANGS (the install version) uses dashes, not underscores, so convert underscore to dash and plus to space
+install_langs=${OCR_LANGUAGE//_/-}    # First convert any underscores to dashes
+install_langs=${install_langs//+/ }    # Then convert plus signs to spaces
+
+read -r -a install_langs_array <<< "${install_langs}"
 
 {
 	if [[ ! $URL == "" ]] ; then
@@ -339,10 +349,10 @@ read -r -a OCR_LANGUAGES_ARRAY <<< "${_split_langs}"
 		echo "USERMAP_GID=$USERMAP_GID"
 	fi
 	echo "PAPERLESS_TIME_ZONE=$TIME_ZONE"
-	echo "PAPERLESS_OCR_LANGUAGE=$OCR_LANGUAGE"
-	echo "PAPERLESS_SECRET_KEY=$SECRET_KEY"
-	if [[ ! ${DEFAULT_LANGUAGES[*]} =~ ${OCR_LANGUAGES_ARRAY[*]} ]] ; then
-		echo "PAPERLESS_OCR_LANGUAGES=${OCR_LANGUAGES_ARRAY[*]}"
+	echo "PAPERLESS_OCR_LANGUAGE=$ocr_langs"
+	echo "PAPERLESS_SECRET_KEY='$SECRET_KEY'"
+	if [[ ! ${DEFAULT_LANGUAGES[*]} =~ ${install_langs_array[*]} ]] ; then
+		echo "PAPERLESS_OCR_LANGUAGES=${install_langs_array[*]}"
 	fi
 } > docker-compose.env
 
@@ -382,16 +392,16 @@ if [ "$l1" -eq "$l2" ] ; then
 fi
 
 
-${DOCKER_COMPOSE_CMD} pull
+docker compose pull
 
 if [ "$DATABASE_BACKEND" == "postgres" ] || [ "$DATABASE_BACKEND" == "mariadb" ] ; then
-	echo "Starting DB first for initilzation"
-	${DOCKER_COMPOSE_CMD} up --detach db
+	echo "Starting DB first for initialization"
+	docker compose up --detach db
 	# hopefully enough time for even the slower systems
 	sleep 15
-	${DOCKER_COMPOSE_CMD} stop
+	docker compose stop
 fi
 
-${DOCKER_COMPOSE_CMD} run --rm -e DJANGO_SUPERUSER_PASSWORD="$PASSWORD" webserver createsuperuser --noinput --username "$USERNAME" --email "$EMAIL"
+docker compose run --rm -e DJANGO_SUPERUSER_PASSWORD="$PASSWORD" webserver createsuperuser --noinput --username "$USERNAME" --email "$EMAIL"
 
-${DOCKER_COMPOSE_CMD} up --detach
+docker compose up --detach

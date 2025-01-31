@@ -4,27 +4,27 @@
 
 Check for the following issues:
 
-- Ensure that the directory you're putting your documents in is the
-  folder paperless is watching. With docker, this setting is performed
-  in the `docker-compose.yml` file. Without docker, look at the
-  `CONSUMPTION_DIR` setting. Don't adjust this setting if you're
-  using docker.
+-   Ensure that the directory you're putting your documents in is the
+    folder paperless is watching. With docker, this setting is performed
+    in the `docker-compose.yml` file. Without Docker, look at the
+    `CONSUMPTION_DIR` setting. Don't adjust this setting if you're
+    using docker.
 
-- Ensure that redis is up and running. Paperless does its task
-  processing asynchronously, and for documents to arrive at the task
-  processor, it needs redis to run.
+-   Ensure that redis is up and running. Paperless does its task
+    processing asynchronously, and for documents to arrive at the task
+    processor, it needs redis to run.
 
-- Ensure that the task processor is running. Docker does this
-  automatically. Manually invoke the task processor by executing
+-   Ensure that the task processor is running. Docker does this
+    automatically. Manually invoke the task processor by executing
 
-  ```shell-session
-  $ celery --app paperless worker
-  ```
+    ```shell-session
+    celery --app paperless worker
+    ```
 
-- Look at the output of paperless and inspect it for any errors.
+-   Look at the output of paperless and inspect it for any errors.
 
-- Go to the admin interface, and check if there are failed tasks. If
-  so, the tasks will contain an error message.
+-   Go to the admin interface, and check if there are failed tasks. If
+    so, the tasks will contain an error message.
 
 ## Consumer warns `OCR for XX failed`
 
@@ -46,8 +46,7 @@ run:
 If you notice that the consumer will only pickup files in the
 consumption directory at startup, but won't find any other files added
 later, you will need to enable filesystem polling with the configuration
-option `PAPERLESS_CONSUMER_POLLING`, see
-`[here](/configuration#polling).
+option [`PAPERLESS_CONSUMER_POLLING`](configuration.md#PAPERLESS_CONSUMER_POLLING).
 
 This will disable listening to filesystem changes with inotify and
 paperless will manually check the consumption directory for changes
@@ -79,12 +78,12 @@ Ensure that `chown` is possible on these directories.
 This indicates that the Auto matching algorithm found no documents to
 learn from. This may have two reasons:
 
-- You don't use the Auto matching algorithm: The error can be safely
-  ignored in this case.
-- You are using the Auto matching algorithm: The classifier explicitly
-  excludes documents with Inbox tags. Verify that there are documents
-  in your archive without inbox tags. The algorithm will only learn
-  from documents not in your inbox.
+-   You don't use the Auto matching algorithm: The error can be safely
+    ignored in this case.
+-   You are using the Auto matching algorithm: The classifier explicitly
+    excludes documents with Inbox tags. Verify that there are documents
+    in your archive without inbox tags. The algorithm will only learn
+    from documents not in your inbox.
 
 ## UserWarning in sklearn on every single document
 
@@ -121,17 +120,17 @@ Gotenberg raises this error.
 
 You can increase the timeout by configuring a command flag for Gotenberg
 (see also [here](https://gotenberg.dev/docs/modules/api#properties)). If
-using docker-compose, this is achieved by the following configuration
+using Docker Compose, this is achieved by the following configuration
 change in the `docker-compose.yml` file:
 
 ```yaml
 # The gotenberg chromium route is used to convert .eml files. We do not
 # want to allow external content like tracking pixels or even javascript.
 command:
-  - 'gotenberg'
-  - '--chromium-disable-javascript=true'
-  - '--chromium-allow-list=file:///tmp/.*'
-  - '--api-timeout=60'
+    - 'gotenberg'
+    - '--chromium-disable-javascript=true'
+    - '--chromium-allow-list=file:///tmp/.*'
+    - '--api-timeout=60'
 ```
 
 ## Permission denied errors in the consumption directory
@@ -139,13 +138,13 @@ command:
 You might encounter errors such as:
 
 ```shell-session
-The following error occured while consuming document.pdf: [Errno 13] Permission denied: '/usr/src/paperless/src/../consume/document.pdf'
+The following error occurred while consuming document.pdf: [Errno 13] Permission denied: '/usr/src/paperless/src/../consume/document.pdf'
 ```
 
 This happens when paperless does not have permission to delete files
 inside the consumption directory. Ensure that `USERMAP_UID` and
 `USERMAP_GID` are set to the user id and group id you use on the host
-operating system, if these are different from `1000`. See [Docker setup](/setup#docker_hub).
+operating system, if these are different from `1000`. See [Docker setup](setup.md#docker).
 
 Also ensure that you are able to read and write to the consumption
 directory on the host.
@@ -265,8 +264,8 @@ This probably indicates paperless tried to consume the same file twice.
 This can happen for a number of reasons, depending on how documents are
 placed into the consume folder. If paperless is using inotify (the
 default) to check for documents, try adjusting the
-[inotify configuration](/configuration#inotify). If polling is enabled, try adjusting the
-[polling configuration](/configuration#polling).
+[inotify configuration](configuration.md#inotify). If polling is enabled, try adjusting the
+[polling configuration](configuration.md#polling).
 
 ## Consumer fails waiting for file to remain unmodified.
 
@@ -278,7 +277,7 @@ You might find messages like these in your log files:
 
 This indicates paperless timed out while waiting for the file to be
 completely written to the consume folder. Adjusting
-[polling configuration](/configuration#polling) values should resolve the issue.
+[polling configuration](configuration.md#polling) values should resolve the issue.
 
 !!! note
 
@@ -297,8 +296,8 @@ This indicates paperless was unable to open the file, as the OS reported
 the file as still being in use. To prevent a crash, paperless did not
 try to consume the file. If paperless is using inotify (the default) to
 check for documents, try adjusting the
-[inotify configuration](/configuration#inotify). If polling is enabled, try adjusting the
-[polling configuration](/configuration#polling).
+[inotify configuration](configuration.md#inotify). If polling is enabled, try adjusting the
+[polling configuration](configuration.md#polling).
 
 !!! note
 
@@ -320,7 +319,7 @@ many workers attempting to access the database simultaneously.
 
 Consider changing to the PostgreSQL database if you will be processing
 many documents at once often. Otherwise, try tweaking the
-`PAPERLESS_DB_TIMEOUT` setting to allow more time for the database to
+[`PAPERLESS_DB_TIMEOUT`](configuration.md#PAPERLESS_DB_TIMEOUT) setting to allow more time for the database to
 unlock. This may have minor performance implications.
 
 ## gunicorn fails to start with "is not a valid port number"
@@ -330,7 +329,7 @@ environment variable named `${serviceName}_PORT`. This is
 the same environment variable which is used by Paperless to optionally
 change the port gunicorn listens on.
 
-To fix this, set `PAPERLESS_PORT` again to your desired port, or the
+To fix this, set [`PAPERLESS_PORT`](configuration.md#PAPERLESS_PORT) again to your desired port, or the
 default of 8000.
 
 ## Database Warns about unique constraint "documents_tag_name_uniq
@@ -345,3 +344,29 @@ STATEMENT:  INSERT INTO "documents_tag" ("owner_id", "name", "match", "matching_
 
 This can happen during heavy consumption when using polling. Paperless will handle it correctly and the file
 will still be consumed
+
+## Consumption fails with "Ghostscript PDF/A rendering failed"
+
+Newer versions of OCRmyPDF will fail if it encounters errors during processing.
+This is intentional as the output archive file may differ in unexpected or undesired
+ways from the original. As the logs indicate, if you encounter this error you can set
+`PAPERLESS_OCR_USER_ARGS: '{"continue_on_soft_render_error": true}'` to try to 'force'
+processing documents with this issue.
+
+## Logs show "possible incompatible database column" when deleting documents {#convert-uuid-field}
+
+You may see errors when deleting documents like:
+
+```
+Data too long for column 'transaction_id' at row 1
+```
+
+This error can occur in installations which have upgraded from a version of Paperless-ngx that used Django 4 (Paperless-ngx versions prior to v2.13.0) with a MariaDB/MySQL database. Due to the backawards-incompatible change in Django 5, the column "documents_document.transaction_id" will need to be re-created, which can be done with a one-time run of the following management command:
+
+```shell-session
+$ python3 manage.py convert_mariadb_uuid
+```
+
+## Platform-Specific Deployment Troubleshooting
+
+A user-maintained wiki page is available to help troubleshoot issues that may arise when trying to deploy Paperless-ngx on specific platforms, for example SELinux. Please see [the wiki](https://github.com/paperless-ngx/paperless-ngx/wiki/Platform%E2%80%90Specific-Troubleshooting).

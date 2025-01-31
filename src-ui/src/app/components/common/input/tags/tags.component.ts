@@ -5,13 +5,24 @@ import {
   Input,
   OnInit,
   Output,
+  ViewChild,
 } from '@angular/core'
-import { ControlValueAccessor, NG_VALUE_ACCESSOR } from '@angular/forms'
+import {
+  ControlValueAccessor,
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { RouterModule } from '@angular/router'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
-import { TagEditDialogComponent } from '../../edit-dialog/tag-edit-dialog/tag-edit-dialog.component'
+import { NgSelectComponent, NgSelectModule } from '@ng-select/ng-select'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { first, firstValueFrom, tap } from 'rxjs'
+import { Tag } from 'src/app/data/tag'
 import { TagService } from 'src/app/services/rest/tag.service'
 import { EditDialogMode } from '../../edit-dialog/edit-dialog.component'
+import { TagEditDialogComponent } from '../../edit-dialog/tag-edit-dialog/tag-edit-dialog.component'
+import { TagComponent } from '../../tag/tag.component'
 
 @Component({
   providers: [
@@ -21,12 +32,23 @@ import { EditDialogMode } from '../../edit-dialog/edit-dialog.component'
       multi: true,
     },
   ],
-  selector: 'app-input-tags',
+  selector: 'pngx-input-tags',
   templateUrl: './tags.component.html',
   styleUrls: ['./tags.component.scss'],
+  imports: [
+    TagComponent,
+    NgSelectModule,
+    FormsModule,
+    ReactiveFormsModule,
+    RouterModule,
+    NgxBootstrapIconsModule,
+  ],
 })
 export class TagsComponent implements OnInit, ControlValueAccessor {
-  constructor(private tagService: TagService, private modalService: NgbModal) {
+  constructor(
+    private tagService: TagService,
+    private modalService: NgbModal
+  ) {
     this.createTagRef = this.createTag.bind(this)
   }
 
@@ -54,6 +76,9 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
   }
 
   @Input()
+  title = $localize`Tags`
+
+  @Input()
   disabled = false
 
   @Input()
@@ -66,18 +91,24 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
   allowCreate: boolean = true
 
   @Input()
+  hideAddButton: boolean = false
+
+  @Input()
   showFilter: boolean = false
 
+  @Input()
+  horizontal: boolean = false
+
   @Output()
-  filterDocuments = new EventEmitter<PaperlessTag[]>()
+  filterDocuments = new EventEmitter<Tag[]>()
 
-  value: number[]
+  @ViewChild('tagSelect') select: NgSelectComponent
 
-  tags: PaperlessTag[]
+  value: number[] = []
+
+  tags: Tag[] = []
 
   public createTagRef: (name) => void
-
-  private _lastSearchTerm: string
 
   getTag(id: number) {
     if (this.tags) {
@@ -108,15 +139,20 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
     })
     modal.componentInstance.dialogMode = EditDialogMode.CREATE
     if (name) modal.componentInstance.object = { name: name }
-    else if (this._lastSearchTerm)
-      modal.componentInstance.object = { name: this._lastSearchTerm }
-    modal.componentInstance.succeeded.subscribe((newTag) => {
-      this.tagService.listAll().subscribe((tags) => {
-        this.tags = tags.results
-        this.value = [...this.value, newTag.id]
-        this.onChange(this.value)
-      })
-    })
+    else if (this.select.searchTerm)
+      modal.componentInstance.object = { name: this.select.searchTerm }
+    this.select.searchTerm = null
+    this.select.detectChanges()
+    return firstValueFrom(
+      (modal.componentInstance as TagEditDialogComponent).succeeded.pipe(
+        first(),
+        tap(() => {
+          this.tagService.listAll().subscribe((tags) => {
+            this.tags = tags.results
+          })
+        })
+      )
+    )
   }
 
   getSuggestions() {
@@ -132,20 +168,6 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
   addTag(id) {
     this.value = [...this.value, id]
     this.onChange(this.value)
-  }
-
-  clearLastSearchTerm() {
-    this._lastSearchTerm = null
-  }
-
-  onSearch($event) {
-    this._lastSearchTerm = $event.term
-  }
-
-  onBlur() {
-    setTimeout(() => {
-      this.clearLastSearchTerm()
-    }, 3000)
   }
 
   get hasPrivate(): boolean {

@@ -1,7 +1,12 @@
-import { Component, forwardRef, Input, OnInit } from '@angular/core'
-import { NG_VALUE_ACCESSOR } from '@angular/forms'
+import { Component, forwardRef } from '@angular/core'
+import {
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { NgSelectComponent } from '@ng-select/ng-select'
 import { first } from 'rxjs/operators'
-import { PaperlessGroup } from 'src/app/data/paperless-group'
+import { Group } from 'src/app/data/group'
 import { GroupService } from 'src/app/services/rest/group.service'
 import { AbstractInputComponent } from '../../abstract-input'
 
@@ -13,12 +18,13 @@ import { AbstractInputComponent } from '../../abstract-input'
       multi: true,
     },
   ],
-  selector: 'app-permissions-group',
+  selector: 'pngx-permissions-group',
   templateUrl: './permissions-group.component.html',
   styleUrls: ['./permissions-group.component.scss'],
+  imports: [NgSelectComponent, FormsModule, ReactiveFormsModule],
 })
-export class PermissionsGroupComponent extends AbstractInputComponent<PaperlessGroup> {
-  groups: PaperlessGroup[]
+export class PermissionsGroupComponent extends AbstractInputComponent<Group> {
+  groups: Group[]
 
   constructor(groupService: GroupService) {
     super()

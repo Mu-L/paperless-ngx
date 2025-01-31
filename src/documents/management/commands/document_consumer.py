@@ -8,8 +8,8 @@ from threading import Event
 from time import monotonic
 from time import sleep
 from typing import Final
-from typing import Set
 
+from django import db
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
@@ -26,19 +26,20 @@ from documents.tasks import consume_file
 try:
     from inotifyrecursive import INotify
     from inotifyrecursive import flags
-except ImportError:  # pragma: nocover
+except ImportError:  # pragma: no cover
     INotify = flags = None
 
 logger = logging.getLogger("paperless.management.consumer")
 
 
-def _tags_from_path(filepath) -> Set[Tag]:
+def _tags_from_path(filepath) -> list[int]:
     """
     Walk up the directory tree from filepath to CONSUMPTION_DIR
     and get or create Tag IDs for every directory.
 
     Returns set of Tag models
     """
+    db.close_old_connections()
     tag_ids = set()
     path_parts = Path(filepath).relative_to(settings.CONSUMPTION_DIR).parent.parts
     for part in path_parts:
@@ -46,7 +47,7 @@ def _tags_from_path(filepath) -> Set[Tag]:
             Tag.objects.get_or_create(name__iexact=part, defaults={"name": part})[0].pk,
         )
 
-    return tag_ids
+    return list(tag_ids)
 
 
 def _is_ignored(filepath: str) -> bool:
@@ -231,6 +232,9 @@ class Command(BaseCommand):
         if not os.path.isdir(directory):
             raise CommandError(f"Consumption directory {directory} does not exist")
 
+        # Consumer will need this
+        settings.SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+
         if recursive:
             for dirpath, _, filenames in os.walk(directory):
                 for filename in filenames:
@@ -246,6 +250,8 @@ class Command(BaseCommand):
         if settings.CONSUMER_POLLING == 0 and INotify:
             self.handle_inotify(directory, recursive, options["testing"])
         else:
+            if INotify is None and settings.CONSUMER_POLLING == 0:  # pragma: no cover
+                logger.warning("Using polling as INotify import failed")
             self.handle_polling(directory, recursive, options["testing"])
 
         logger.debug("Consumer exiting.")
@@ -258,8 +264,14 @@ class Command(BaseCommand):
             timeout = self.testing_timeout_s
             logger.debug(f"Configuring timeout to {timeout}s")
 
+        polling_interval = settings.CONSUMER_POLLING
+        if polling_interval == 0:  # pragma: no cover
+            # Only happens if INotify failed to import
+            logger.warning("Using polling of 10s, consider setting this")
+            polling_interval = 10
+
         with ThreadPoolExecutor(max_workers=4) as pool:
-            observer = PollingObserver(timeout=settings.CONSUMER_POLLING)
+            observer = PollingObserver(timeout=polling_interval)
             observer.schedule(Handler(pool), directory, recursive=recursive)
             observer.start()
             try:
@@ -274,19 +286,20 @@ class Command(BaseCommand):
     def handle_inotify(self, directory, recursive, is_testing: bool):
         logger.info(f"Using inotify to watch directory for changes: {directory}")
 
-        timeout = None
+        timeout_ms = None
         if is_testing:
-            timeout = self.testing_timeout_ms
-            logger.debug(f"Configuring timeout to {timeout}ms")
+            timeout_ms = self.testing_timeout_ms
+            logger.debug(f"Configuring timeout to {timeout_ms}ms")
 
         inotify = INotify()
-        inotify_flags = flags.CLOSE_WRITE | flags.MOVED_TO
+        inotify_flags = flags.CLOSE_WRITE | flags.MOVED_TO | flags.MODIFY
         if recursive:
             descriptor = inotify.add_watch_recursive(directory, inotify_flags)
         else:
             descriptor = inotify.add_watch(directory, inotify_flags)
 
-        inotify_debounce: Final[float] = settings.CONSUMER_INOTIFY_DELAY
+        inotify_debounce_secs: Final[float] = settings.CONSUMER_INOTIFY_DELAY
+        inotify_debounce_ms: Final[int] = inotify_debounce_secs * 1000
 
         finished = False
 
@@ -294,21 +307,22 @@ class Command(BaseCommand):
 
         while not finished:
             try:
-                for event in inotify.read(timeout=timeout):
+                for event in inotify.read(timeout=timeout_ms):
                     path = inotify.get_path(event.wd) if recursive else directory
                     filepath = os.path.join(path, event.name)
-                    notified_files[filepath] = monotonic()
+                    if flags.MODIFY in flags.from_mask(event.mask):
+                        notified_files.pop(filepath, None)
+                    else:
+                        notified_files[filepath] = monotonic()
 
                 # Check the files against the timeout
                 still_waiting = {}
-                for filepath in notified_files:
-                    # Time of the last inotify event for this file
-                    last_event_time = notified_files[filepath]
-
+                # last_event_time is time of the last inotify event for this file
+                for filepath, last_event_time in notified_files.items():
                     # Current time - last time over the configured timeout
                     waited_long_enough = (
                         monotonic() - last_event_time
-                    ) > inotify_debounce
+                    ) > inotify_debounce_secs
 
                     # Also make sure the file exists still, some scanners might write a
                     # temporary file first
@@ -327,11 +341,11 @@ class Command(BaseCommand):
                 # If files are waiting, need to exit read() to check them
                 # Otherwise, go back to infinite sleep time, but only if not testing
                 if len(notified_files) > 0:
-                    timeout = inotify_debounce
+                    timeout_ms = inotify_debounce_ms
                 elif is_testing:
-                    timeout = self.testing_timeout_ms
+                    timeout_ms = self.testing_timeout_ms
                 else:
-                    timeout = None
+                    timeout_ms = None
 
                 if self.stop_flag.is_set():
                     logger.debug("Finishing because event is set")

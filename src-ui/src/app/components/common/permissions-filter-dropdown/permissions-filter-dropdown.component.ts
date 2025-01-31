@@ -1,6 +1,12 @@
+import { NgClass } from '@angular/common'
 import { Component, EventEmitter, Input, Output } from '@angular/core'
+import { FormsModule, ReactiveFormsModule } from '@angular/forms'
+import { NgbDropdownModule } from '@ng-bootstrap/ng-bootstrap'
+import { NgSelectComponent } from '@ng-select/ng-select'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
 import { first } from 'rxjs'
-import { PaperlessUser } from 'src/app/data/paperless-user'
+import { User } from 'src/app/data/user'
+import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
 import {
   PermissionAction,
   PermissionType,
@@ -9,6 +15,7 @@ import {
 import { UserService } from 'src/app/services/rest/user.service'
 import { SettingsService } from 'src/app/services/settings.service'
 import { ComponentWithPermissions } from '../../with-permissions/with-permissions.component'
+import { ClearableBadgeComponent } from '../clearable-badge/clearable-badge.component'
 
 export class PermissionsSelectionModel {
   ownerFilter: OwnerFilterType
@@ -32,12 +39,23 @@ export enum OwnerFilterType {
   NOT_SELF = 2,
   OTHERS = 3,
   UNOWNED = 4,
+  SHARED_BY_ME = 5,
 }
 
 @Component({
-  selector: 'app-permissions-filter-dropdown',
+  selector: 'pngx-permissions-filter-dropdown',
   templateUrl: './permissions-filter-dropdown.component.html',
   styleUrls: ['./permissions-filter-dropdown.component.scss'],
+  imports: [
+    ClearableBadgeComponent,
+    IfPermissionsDirective,
+    FormsModule,
+    ReactiveFormsModule,
+    NgbDropdownModule,
+    NgSelectComponent,
+    NgClass,
+    NgxBootstrapIconsModule,
+  ],
 })
 export class PermissionsFilterDropdownComponent extends ComponentWithPermissions {
   public OwnerFilterType = OwnerFilterType
@@ -54,7 +72,7 @@ export class PermissionsFilterDropdownComponent extends ComponentWithPermissions
   @Output()
   ownerFilterSet = new EventEmitter<PermissionsSelectionModel>()
 
-  users: PaperlessUser[]
+  users: User[]
 
   hideUnowned: boolean
 
@@ -66,7 +84,7 @@ export class PermissionsFilterDropdownComponent extends ComponentWithPermissions
   }
 
   constructor(
-    permissionsService: PermissionsService,
+    public permissionsService: PermissionsService,
     userService: UserService,
     private settingsService: SettingsService
   ) {
@@ -105,6 +123,13 @@ export class PermissionsFilterDropdownComponent extends ComponentWithPermissions
       this.selectionModel.hideUnowned = false
     } else if (this.selectionModel.ownerFilter === OwnerFilterType.NONE) {
       this.selectionModel.userID = null
+      this.selectionModel.includeUsers = []
+      this.selectionModel.excludeUsers = []
+      this.selectionModel.hideUnowned = false
+    } else if (
+      this.selectionModel.ownerFilter === OwnerFilterType.SHARED_BY_ME
+    ) {
+      this.selectionModel.userID = this.settingsService.currentUser.id
       this.selectionModel.includeUsers = []
       this.selectionModel.excludeUsers = []
       this.selectionModel.hideUnowned = false

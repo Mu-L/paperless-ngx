@@ -1,17 +1,16 @@
+import { Injectable } from '@angular/core'
 import {
-  CanActivate,
   ActivatedRouteSnapshot,
+  Router,
   RouterStateSnapshot,
   UrlTree,
-  Router,
 } from '@angular/router'
-import { Injectable } from '@angular/core'
+import { TourService } from 'ngx-ui-tour-ng-bootstrap'
 import { PermissionsService } from '../services/permissions.service'
 import { ToastService } from '../services/toast.service'
-import { TourService } from 'ngx-ui-tour-ng-bootstrap'
 
 @Injectable()
-export class PermissionsGuard implements CanActivate {
+export class PermissionsGuard {
   constructor(
     private permissionsService: PermissionsService,
     private router: Router,
@@ -24,10 +23,12 @@ export class PermissionsGuard implements CanActivate {
     state: RouterStateSnapshot
   ): boolean | UrlTree {
     if (
-      !this.permissionsService.currentUserCan(
-        route.data.requiredPermission.action,
-        route.data.requiredPermission.type
-      )
+      (route.data.requireAdmin && !this.permissionsService.isAdmin()) ||
+      (route.data.requiredPermission &&
+        !this.permissionsService.currentUserCan(
+          route.data.requiredPermission.action,
+          route.data.requiredPermission.type
+        ))
     ) {
       // Check if tour is running 1 = TourState.ON
       if (this.tourService.getStatus() !== 1) {

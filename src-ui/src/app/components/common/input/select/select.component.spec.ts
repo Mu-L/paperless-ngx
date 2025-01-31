@@ -6,19 +6,19 @@ import {
 } from '@angular/core/testing'
 import {
   FormsModule,
-  ReactiveFormsModule,
   NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
 } from '@angular/forms'
-import { SelectComponent } from './select.component'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
+import { RouterTestingModule } from '@angular/router/testing'
+import { NgSelectModule } from '@ng-select/ng-select'
 import {
   DEFAULT_MATCHING_ALGORITHM,
   MATCH_ALL,
 } from 'src/app/data/matching-model'
-import { NgSelectModule } from '@ng-select/ng-select'
-import { RouterTestingModule } from '@angular/router/testing'
+import { Tag } from 'src/app/data/tag'
+import { SelectComponent } from './select.component'
 
-const items: PaperlessTag[] = [
+const items: Tag[] = [
   {
     id: 1,
     name: 'Tag1',
@@ -47,13 +47,13 @@ describe('SelectComponent', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [SelectComponent],
       providers: [],
       imports: [
         FormsModule,
         ReactiveFormsModule,
         NgSelectModule,
         RouterTestingModule,
+        SelectComponent,
       ],
     }).compileComponents()
 
@@ -118,4 +118,18 @@ describe('SelectComponent', () => {
     tick(3000)
     expect(clearSpy).toHaveBeenCalled()
   }))
+
+  it('should emit filtered documents', () => {
+    component.value = 10
+    component.items = items
+    const emitSpy = jest.spyOn(component.filterDocuments, 'emit')
+    component.onFilterDocuments()
+    expect(emitSpy).toHaveBeenCalledWith([items[2]])
+  })
+
+  it('should return the correct filter button title', () => {
+    component.title = 'Tag'
+    const expectedTitle = `Filter documents with this ${component.title}`
+    expect(component.filterButtonTitle).toEqual(expectedTitle)
+  })
 })

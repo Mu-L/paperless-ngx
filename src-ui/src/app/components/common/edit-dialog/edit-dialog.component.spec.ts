@@ -1,6 +1,7 @@
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
 import {
-  HttpClientTestingModule,
   HttpTestingController,
+  provideHttpClientTesting,
 } from '@angular/common/http/testing'
 import { Component } from '@angular/core'
 import {
@@ -10,25 +11,26 @@ import {
   tick,
 } from '@angular/core/testing'
 import {
-  FormGroup,
   FormControl,
+  FormGroup,
   FormsModule,
   ReactiveFormsModule,
 } from '@angular/forms'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
-import { TagService } from 'src/app/services/rest/tag.service'
-import { UserService } from 'src/app/services/rest/user.service'
-import { SettingsService } from 'src/app/services/settings.service'
-import { EditDialogComponent, EditDialogMode } from './edit-dialog.component'
+import { of } from 'rxjs'
 import {
   DEFAULT_MATCHING_ALGORITHM,
   MATCH_ALL,
   MATCH_AUTO,
   MATCH_NONE,
 } from 'src/app/data/matching-model'
-import { of } from 'rxjs'
+import { Tag } from 'src/app/data/tag'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { TagService } from 'src/app/services/rest/tag.service'
+import { UserService } from 'src/app/services/rest/user.service'
+import { SettingsService } from 'src/app/services/settings.service'
 import { environment } from 'src/environments/environment'
+import { EditDialogComponent, EditDialogMode } from './edit-dialog.component'
 
 @Component({
   template: `
@@ -36,8 +38,9 @@ import { environment } from 'src/environments/environment'
       <h4 class="modal-title" id="modal-basic-title">{{ getTitle() }}</h4>
     </div>
   `,
+  imports: [FormsModule, ReactiveFormsModule],
 })
-class TestComponent extends EditDialogComponent<PaperlessTag> {
+class TestComponent extends EditDialogComponent<Tag> {
   constructor(
     service: TagService,
     activeModal: NgbActiveModal,
@@ -88,12 +91,13 @@ describe('EditDialogComponent', () => {
   let component: TestComponent
   let fixture: ComponentFixture<TestComponent>
   let tagService: TagService
+  let settingsService: SettingsService
   let activeModal: NgbActiveModal
   let httpTestingController: HttpTestingController
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [TestComponent],
+      imports: [FormsModule, ReactiveFormsModule, TestComponent],
       providers: [
         NgbActiveModal,
         {
@@ -110,18 +114,16 @@ describe('EditDialogComponent', () => {
               }),
           },
         },
-        {
-          provide: SettingsService,
-          useValue: {
-            currentUser,
-          },
-        },
+        SettingsService,
         TagService,
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
       ],
-      imports: [HttpClientTestingModule, FormsModule, ReactiveFormsModule],
     }).compileComponents()
 
     tagService = TestBed.inject(TagService)
+    settingsService = TestBed.inject(SettingsService)
+    settingsService.currentUser = currentUser
     activeModal = TestBed.inject(NgbActiveModal)
     httpTestingController = TestBed.inject(HttpTestingController)
 
@@ -132,6 +134,7 @@ describe('EditDialogComponent', () => {
   })
 
   it('should interpolate object permissions', () => {
+    component.getMatchingAlgorithms() // coverage
     component.object = tag
     component.dialogMode = EditDialogMode.EDIT
     component.ngOnInit()
@@ -149,12 +152,38 @@ describe('EditDialogComponent', () => {
     expect(component.closeEnabled).toBeTruthy()
   }))
 
-  it('should set default owner when in create mode', () => {
+  it('should set default owner when in create mode if unset', () => {
     component.dialogMode = EditDialogMode.CREATE
     component.ngOnInit()
     expect(component.objectForm.get('permissions_form').value.owner).toEqual(
       currentUser.id
     )
+    // cover optional chaining
+    component.objectForm.removeControl('permissions_form')
+    component.ngOnInit()
+  })
+
+  it('should set default perms when in create mode if set', () => {
+    component.dialogMode = EditDialogMode.CREATE
+    settingsService.set(SETTINGS_KEYS.DEFAULT_PERMS_OWNER, 11)
+    settingsService.set(SETTINGS_KEYS.DEFAULT_PERMS_VIEW_USERS, [1, 2])
+    settingsService.set(SETTINGS_KEYS.DEFAULT_PERMS_VIEW_GROUPS, [3])
+    settingsService.set(SETTINGS_KEYS.DEFAULT_PERMS_EDIT_USERS, [4])
+    settingsService.set(SETTINGS_KEYS.DEFAULT_PERMS_EDIT_GROUPS, [5])
+    component.ngOnInit()
+    expect(component.objectForm.get('permissions_form').value.owner).toEqual(11)
+    expect(
+      component.objectForm.get('permissions_form').value.set_permissions
+    ).toEqual({
+      view: {
+        users: [1, 2],
+        groups: [3],
+      },
+      change: {
+        users: [4],
+        groups: [5],
+      },
+    })
     // cover optional chaining
     component.objectForm.removeControl('permissions_form')
     component.ngOnInit()

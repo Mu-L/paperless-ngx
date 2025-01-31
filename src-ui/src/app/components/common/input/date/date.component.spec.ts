@@ -1,17 +1,13 @@
+import { provideHttpClient, withInterceptorsFromDi } from '@angular/common/http'
+import { provideHttpClientTesting } from '@angular/common/http/testing'
 import { ComponentFixture, TestBed } from '@angular/core/testing'
-import {
-  FormsModule,
-  NG_VALUE_ACCESSOR,
-  ReactiveFormsModule,
-} from '@angular/forms'
-import { DateComponent } from './date.component'
-import { HttpClientTestingModule } from '@angular/common/http/testing'
-import {
-  NgbDateParserFormatter,
-  NgbDatepickerModule,
-} from '@ng-bootstrap/ng-bootstrap'
-import { RouterTestingModule } from '@angular/router/testing'
+import { NG_VALUE_ACCESSOR } from '@angular/forms'
+import { RouterModule } from '@angular/router'
+import { NgbDateParserFormatter } from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule, allIcons } from 'ngx-bootstrap-icons'
+import { routes } from 'src/app/app-routing.module'
 import { LocalizedDateParserFormatter } from 'src/app/utils/ngb-date-parser-formatter'
+import { DateComponent } from './date.component'
 
 describe('DateComponent', () => {
   let component: DateComponent
@@ -20,19 +16,17 @@ describe('DateComponent', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [DateComponent],
+      imports: [
+        NgxBootstrapIconsModule.pick(allIcons),
+        RouterModule.forRoot(routes),
+      ],
       providers: [
         {
           provide: NgbDateParserFormatter,
           useClass: LocalizedDateParserFormatter,
         },
-      ],
-      imports: [
-        FormsModule,
-        ReactiveFormsModule,
-        HttpClientTestingModule,
-        NgbDatepickerModule,
-        RouterTestingModule,
+        provideHttpClient(withInterceptorsFromDi()),
+        provideHttpClientTesting(),
       ],
     }).compileComponents()
 
@@ -81,6 +75,16 @@ describe('DateComponent', () => {
     expect(eventSpy).toHaveBeenCalled()
   })
 
+  it('should show allow system keyboard events', () => {
+    let event: KeyboardEvent = new KeyboardEvent('keypress', {
+      key: '9',
+      altKey: true,
+    })
+    let preventDefaultSpy = jest.spyOn(event, 'preventDefault')
+    input.dispatchEvent(event)
+    expect(preventDefaultSpy).not.toHaveBeenCalled()
+  })
+
   it('should support paste', () => {
     expect(component.value).toBeUndefined()
     const date = '5/4/20'
@@ -99,5 +103,25 @@ describe('DateComponent', () => {
     event['clipboardData'] = clipboardData
     input.dispatchEvent(event)
     expect(component.value).toEqual({ day: 4, month: 5, year: 2020 })
+    // coverage
+    window['clipboardData'] = {
+      getData: (type) => '',
+    }
+    component.onPaste(new Event('foo') as any)
+  })
+
+  it('should set filter button title', () => {
+    component.title = 'foo'
+    expect(component.filterButtonTitle).toEqual(
+      'Filter documents with this foo'
+    )
+  })
+
+  it('should emit date on filter', () => {
+    let dateReceived
+    component.value = '12/16/2023'
+    component.filterDocuments.subscribe((date) => (dateReceived = date))
+    component.onFilterDocuments()
+    expect(dateReceived).toEqual([{ day: 16, month: 12, year: 2023 }])
   })
 })

@@ -1,14 +1,24 @@
 import { Component, ViewChild } from '@angular/core'
-import { FormControl, FormGroup } from '@angular/forms'
-import { NgbActiveModal, NgbAlert } from '@ng-bootstrap/ng-bootstrap'
-import { EditDialogComponent } from 'src/app/components/common/edit-dialog/edit-dialog.component'
 import {
-  IMAPSecurity,
-  PaperlessMailAccount,
-} from 'src/app/data/paperless-mail-account'
+  FormControl,
+  FormGroup,
+  FormsModule,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import {
+  NgbActiveModal,
+  NgbAlert,
+  NgbAlertModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { EditDialogComponent } from 'src/app/components/common/edit-dialog/edit-dialog.component'
+import { IMAPSecurity, MailAccount } from 'src/app/data/mail-account'
 import { MailAccountService } from 'src/app/services/rest/mail-account.service'
 import { UserService } from 'src/app/services/rest/user.service'
 import { SettingsService } from 'src/app/services/settings.service'
+import { CheckComponent } from '../../input/check/check.component'
+import { PasswordComponent } from '../../input/password/password.component'
+import { SelectComponent } from '../../input/select/select.component'
+import { TextComponent } from '../../input/text/text.component'
 
 const IMAP_SECURITY_OPTIONS = [
   { id: IMAPSecurity.None, name: $localize`No encryption` },
@@ -17,11 +27,20 @@ const IMAP_SECURITY_OPTIONS = [
 ]
 
 @Component({
-  selector: 'app-mail-account-edit-dialog',
+  selector: 'pngx-mail-account-edit-dialog',
   templateUrl: './mail-account-edit-dialog.component.html',
   styleUrls: ['./mail-account-edit-dialog.component.scss'],
+  imports: [
+    TextComponent,
+    CheckComponent,
+    PasswordComponent,
+    SelectComponent,
+    FormsModule,
+    ReactiveFormsModule,
+    NgbAlertModule,
+  ],
 })
-export class MailAccountEditDialogComponent extends EditDialogComponent<PaperlessMailAccount> {
+export class MailAccountEditDialogComponent extends EditDialogComponent<MailAccount> {
   testActive: boolean = false
   testResult: string
   alertTimeout

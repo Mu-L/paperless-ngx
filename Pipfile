@@ -3,78 +3,70 @@ url = "https://pypi.python.org/simple"
 verify_ssl = true
 name = "pypi"
 
-[[source]]
-url = "https://www.piwheels.org/simple"
-verify_ssl = true
-name = "piwheels"
-
 [packages]
-dateparser = "~=1.1"
+dateparser = "~=1.2"
 # WARNING: django does not use semver.
 #          Only patch versions are guaranteed to not introduce breaking changes.
-django = "~=4.1.9"
-django-cors-headers = "*"
+django = "~=5.1.5"
+django-allauth = {extras = ["mfa", "socialaccount"], version = "*"}
+django-auditlog = "*"
 django-celery-results = "*"
 django-compression-middleware = "*"
-django-guardian = "*"
+django-cors-headers = "*"
 django-extensions = "*"
-django-filter = "~=22.1"
-djangorestframework = "~=3.14"
+django-filter = "~=24.3"
+django-guardian = "*"
+django-multiselectfield = "*"
+django-soft-delete = "*"
+djangorestframework = "~=3.15.2"
 djangorestframework-guardian = "*"
+drf-writable-nested = "*"
+bleach = "*"
+celery = {extras = ["redis"], version = "*"}
+channels = "~=4.2"
+channels-redis = "*"
+concurrent-log-handler = "*"
 filelock = "*"
+flower = "*"
+gotenberg-client = "*"
 gunicorn = "*"
+httpx-oauth = "*"
 imap-tools = "*"
+inotifyrecursive = "~=0.3"
+jinja2 = "~=3.1"
 langdetect = "*"
+mysqlclient = "*"
+nltk = "*"
+ocrmypdf = "~=16.8"
 pathvalidate = "*"
-pillow = "*"
-pikepdf = "*"
-python-gnupg = "*"
-python-dotenv = "*"
+pdf2image = "*"
+psycopg = {version = "*", extras = ["c"]}
 python-dateutil = "*"
-python-magic = "*"
+python-dotenv = "*"
+python-gnupg = "*"
 python-ipware = "*"
-psycopg2 = "*"
+python-magic = "*"
+pyzbar = "*"
 rapidfuzz = "*"
 redis = {extras = ["hiredis"], version = "*"}
-scikit-learn = "~=1.2"
-whitenoise = "~=6.3"
-watchdog = "~=2.2"
-whoosh="~=2.7"
-inotifyrecursive = "~=0.3"
-ocrmypdf = "~=14.0"
-tqdm = "*"
-tika-client = "*"
-channels = "~=4.0"
-channels-redis = "*"
-uvicorn = {extras = ["standard"], version = "*"}
-concurrent-log-handler = "*"
-pyzbar = "*"
-mysqlclient = "*"
-celery = {extras = ["redis"], version = "*"}
+scikit-learn = "~=1.6"
 setproctitle = "*"
-nltk = "*"
-pdf2image = "*"
-flower = "*"
-bleach = "*"
-zxing-cpp = {version = "*", platform_machine = "== 'x86_64'"}
-#
-# Packages locked due to issues (try to check if these are fixed in a release every so often)
-#
-# Pin this until piwheels is building 1.9 (see https://www.piwheels.org/project/scipy/)
-scipy = "==1.8.1"
-# v4 brings in extra dependencies for features not used here
-reportlab = "==3.6.12"
-# Pin this until piwheels is building a newer version (see https://www.piwheels.org/project/cryptography/)
-cryptography = "==40.0.1"
-httpx = "*"
+tika-client = "*"
+tqdm = "*"
+# See https://github.com/paperless-ngx/paperless-ngx/issues/5494
+uvicorn = {extras = ["standard"], version = "==0.25.0"}
+watchdog = "~=6.0"
+whitenoise = "~=6.8"
+whoosh = "~=2.7"
+zxing-cpp = "*"
+
 
 [dev-packages]
 # Linting
-black = "*"
 pre-commit = "*"
 ruff = "*"
-# Testing
 factory-boy = "*"
+# Testing
 pytest = "*"
 pytest-cov = "*"
 pytest-django = "*"
@@ -82,11 +74,13 @@ pytest-httpx = "*"
 pytest-env = "*"
 pytest-sugar = "*"
 pytest-xdist = "*"
-"pdfminer.six" = "*"
+pytest-mock = "*"
+pytest-rerunfailures = "*"
 imagehash = "*"
 daphne = "*"
 # Documentation
 mkdocs-material = "*"
+mkdocs-glightbox = "*"
 
 [typing-dev]
 mypy = "*"
@@ -98,12 +92,9 @@ celery-types = "*"
 django-stubs = {extras= ["compatible-mypy"], version="*"}
 types-dateparser = "*"
 types-bleach = "*"
-types-humanfriendly = "*"
 types-redis = "*"
 types-tqdm = "*"
 types-Markdown = "*"
 types-Pygments = "*"
-types-backports = "*"
 types-colorama = "*"
-types-psycopg2 = "*"
 types-setuptools = "*"

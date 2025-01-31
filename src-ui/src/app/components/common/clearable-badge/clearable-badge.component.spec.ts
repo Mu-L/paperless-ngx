@@ -1,4 +1,5 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing'
+import { NgxBootstrapIconsModule, allIcons } from 'ngx-bootstrap-icons'
 import { ClearableBadgeComponent } from './clearable-badge.component'
 
 describe('ClearableBadgeComponent', () => {
@@ -7,7 +8,10 @@ describe('ClearableBadgeComponent', () => {
 
   beforeEach(async () => {
     TestBed.configureTestingModule({
-      declarations: [ClearableBadgeComponent],
+      imports: [
+        NgxBootstrapIconsModule.pick(allIcons),
+        ClearableBadgeComponent,
+      ],
     }).compileComponents()
 
     fixture = TestBed.createComponent(ClearableBadgeComponent)
