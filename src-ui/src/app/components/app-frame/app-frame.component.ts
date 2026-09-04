@@ -1,75 +1,281 @@
-import { Component, HostListener, OnInit } from '@angular/core'
-import { FormControl } from '@angular/forms'
-import { ActivatedRoute, Router } from '@angular/router'
-import { from, Observable } from 'rxjs'
 import {
-  debounceTime,
-  distinctUntilChanged,
-  map,
-  switchMap,
-  first,
-} from 'rxjs/operators'
-import { PaperlessDocument } from 'src/app/data/paperless-document'
+  CdkDragDrop,
+  CdkDragEnd,
+  CdkDragStart,
+  DragDropModule,
+  moveItemInArray,
+} from '@angular/cdk/drag-drop'
+import { NgClass } from '@angular/common'
+import { Component, HostListener, inject, OnInit, signal } from '@angular/core'
+import { ActivatedRoute, Router, RouterModule } from '@angular/router'
+import {
+  NgbCollapseModule,
+  NgbDropdownModule,
+  NgbModal,
+  NgbNavModule,
+  NgbPopoverModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { TourNgBootstrap } from 'ngx-ui-tour-ng-bootstrap'
+import { Observable } from 'rxjs'
+import { first } from 'rxjs/operators'
+import { Document } from 'src/app/data/document'
+import { SavedView } from 'src/app/data/saved-view'
+import { CollapsibleSection, SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
+import { ComponentCanDeactivate } from 'src/app/guards/dirty-doc.guard'
+import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
+import {
+  DjangoMessageLevel,
+  DjangoMessagesService,
+} from 'src/app/services/django-messages.service'
 import { OpenDocumentsService } from 'src/app/services/open-documents.service'
-import { SavedViewService } from 'src/app/services/rest/saved-view.service'
-import { SearchService } from 'src/app/services/rest/search.service'
-import { environment } from 'src/environments/environment'
-import { DocumentDetailComponent } from '../document-detail/document-detail.component'
-import { DocumentListViewService } from 'src/app/services/document-list-view.service'
-import { FILTER_FULLTEXT_QUERY } from 'src/app/data/filter-rule-type'
 import {
-  RemoteVersionService,
+  PermissionAction,
+  PermissionsService,
+  PermissionType,
+} from 'src/app/services/permissions.service'
+import {
   AppRemoteVersion,
+  RemoteVersionService,
 } from 'src/app/services/rest/remote-version.service'
+import { SavedViewService } from 'src/app/services/rest/saved-view.service'
 import { SettingsService } from 'src/app/services/settings.service'
 import { TasksService } from 'src/app/services/tasks.service'
-import { ComponentCanDeactivate } from 'src/app/guards/dirty-doc.guard'
-import { SETTINGS_KEYS } from 'src/app/data/paperless-uisettings'
 import { ToastService } from 'src/app/services/toast.service'
+import { environment } from 'src/environments/environment'
+import { ChatComponent } from '../chat/chat/chat.component'
+import { BrandMarkComponent } from '../common/logo/brand-mark/brand-mark.component'
+import { LogoComponent } from '../common/logo/logo.component'
+import { ProfileEditDialogComponent } from '../common/profile-edit-dialog/profile-edit-dialog.component'
+import { DocumentDetailComponent } from '../document-detail/document-detail.component'
+import { ComponentWithPermissions } from '../with-permissions/with-permissions.component'
+import { GlobalSearchComponent } from './global-search/global-search.component'
+import { ToastsDropdownComponent } from './toasts-dropdown/toasts-dropdown.component'
+
+const SCROLL_THRESHOLD = 16
 
 @Component({
-  selector: 'app-app-frame',
+  selector: 'pngx-app-frame',
   templateUrl: './app-frame.component.html',
   styleUrls: ['./app-frame.component.scss'],
+  imports: [
+    GlobalSearchComponent,
+    LogoComponent,
+    BrandMarkComponent,
+    DocumentTitlePipe,
+    IfPermissionsDirective,
+    ToastsDropdownComponent,
+    ChatComponent,
+    RouterModule,
+    NgClass,
+    NgbDropdownModule,
+    NgbPopoverModule,
+    NgbCollapseModule,
+    NgbNavModule,
+    NgxBootstrapIconsModule,
+    DragDropModule,
+    TourNgBootstrap,
+  ],
 })
-export class AppFrameComponent implements OnInit, ComponentCanDeactivate {
-  constructor(
-    public router: Router,
-    private activatedRoute: ActivatedRoute,
-    private openDocumentsService: OpenDocumentsService,
-    private searchService: SearchService,
-    public savedViewService: SavedViewService,
-    private remoteVersionService: RemoteVersionService,
-    private list: DocumentListViewService,
-    public settingsService: SettingsService,
-    public tasksService: TasksService,
-    private readonly toastService: ToastService
-  ) {}
+export class AppFrameComponent
+  extends ComponentWithPermissions
+  implements OnInit, ComponentCanDeactivate
+{
+  router = inject(Router)
+  private activatedRoute = inject(ActivatedRoute)
+  private openDocumentsService = inject(OpenDocumentsService)
+  savedViewService = inject(SavedViewService)
+  private remoteVersionService = inject(RemoteVersionService)
+  settingsService = inject(SettingsService)
+  tasksService = inject(TasksService)
+  private readonly toastService = inject(ToastService)
+  private modalService = inject(NgbModal)
+  permissionsService = inject(PermissionsService)
+  private djangoMessagesService = inject(DjangoMessagesService)
+
+  readonly appRemoteVersion = signal<AppRemoteVersion>(null)
+  readonly isMenuCollapsed = signal(true)
+  readonly slimSidebarAnimating = signal(false)
+  readonly mobileSearchHidden = signal(false)
+  private readonly versionSetting = this.settingsService.getSignal<string>(
+    SETTINGS_KEYS.VERSION
+  )
+  private readonly appTitleSetting = this.settingsService.getSignal<string>(
+    SETTINGS_KEYS.APP_TITLE
+  )
+  private readonly appLogoSetting = this.settingsService.getSignal<string>(
+    SETTINGS_KEYS.APP_LOGO
+  )
+  private readonly slimSidebarSetting = this.settingsService.getSignal<boolean>(
+    SETTINGS_KEYS.SLIM_SIDEBAR
+  )
+  private readonly attributesSectionsCollapsedSetting =
+    this.settingsService.getSignal<CollapsibleSection[]>(
+      SETTINGS_KEYS.ATTRIBUTES_SECTIONS_COLLAPSED
+    )
+  private readonly aiEnabledSetting = this.settingsService.getSignal<boolean>(
+    SETTINGS_KEYS.AI_ENABLED
+  )
+  private readonly sidebarViewsShowCountSetting =
+    this.settingsService.getSignal<boolean>(
+      SETTINGS_KEYS.SIDEBAR_VIEWS_SHOW_COUNT
+    )
+  private lastScrollY: number = 0
+
+  constructor() {
+    super()
+    const permissionsService = this.permissionsService
+
+    if (
+      permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.SavedView
+      )
+    ) {
+      this.savedViewService.reload(() => {
+        this.savedViewService.maybeRefreshDocumentCounts()
+      })
+    }
+  }
 
   ngOnInit(): void {
+    this.lastScrollY = window.scrollY
+    this.detectClassicScrollbars()
+
     if (this.settingsService.get(SETTINGS_KEYS.UPDATE_CHECKING_ENABLED)) {
       this.checkForUpdates()
     }
-    this.tasksService.reload()
+    if (
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.PaperlessTask
+      )
+    ) {
+      this.tasksService.reload()
+    }
+
+    this.djangoMessagesService.get().forEach((message) => {
+      switch (message.level) {
+        case DjangoMessageLevel.ERROR:
+        case DjangoMessageLevel.WARNING:
+          this.toastService.showError(message.message)
+          break
+        case DjangoMessageLevel.SUCCESS:
+        case DjangoMessageLevel.INFO:
+        case DjangoMessageLevel.DEBUG:
+          this.toastService.showInfo(message.message)
+          break
+      }
+    })
   }
 
-  versionString = `${environment.appTitle} ${environment.version}`
-  appRemoteVersion
-
-  isMenuCollapsed: boolean = true
-
-  slimSidebarAnimating: boolean = false
-
   toggleSlimSidebar(): void {
-    this.slimSidebarAnimating = true
-    this.slimSidebarEnabled = !this.slimSidebarEnabled
+    this.slimSidebarAnimating.set(true)
+    const slimSidebarEnabled = !this.slimSidebarEnabled
+    this.settingsService.set(SETTINGS_KEYS.SLIM_SIDEBAR, slimSidebarEnabled)
+    if (slimSidebarEnabled) {
+      this.settingsService.set(SETTINGS_KEYS.ATTRIBUTES_SECTIONS_COLLAPSED, [
+        CollapsibleSection.ATTRIBUTES,
+      ])
+    }
+    this.settingsService
+      .storeSettings()
+      .pipe(first())
+      .subscribe({
+        error: (error) => {
+          this.toastService.showError(
+            $localize`An error occurred while saving settings.`
+          )
+          console.warn(error)
+        },
+      })
     setTimeout(() => {
-      this.slimSidebarAnimating = false
+      this.slimSidebarAnimating.set(false)
     }, 200) // slightly longer than css animation for slim sidebar
   }
 
+  toggleAttributesSections(event?: Event): void {
+    event?.preventDefault()
+    event?.stopPropagation()
+    this.attributesSectionsCollapsed = !this.attributesSectionsCollapsed
+  }
+
+  toggleMenuCollapsed(): void {
+    this.isMenuCollapsed.set(!this.isMenuCollapsed())
+  }
+
+  closeMobileSearch(): void {
+    this.mobileSearchHidden.set(false)
+  }
+
+  setMobileSearchHidden(hidden: boolean): void {
+    this.mobileSearchHidden.set(hidden)
+  }
+
+  get versionString(): string {
+    return `${environment.appTitle} v${this.versionSetting()}${environment.tag === 'prod' ? '' : ` #${environment.tag}`}`
+  }
+
+  get appTitle(): string {
+    return this.appTitleSetting() || environment.appTitle
+  }
+
+  get customAppTitle(): string {
+    return this.appTitleSetting()
+  }
+
+  get hasCustomBranding(): boolean {
+    return !!(this.appTitleSetting()?.length || this.appLogoSetting()?.length)
+  }
+
+  get customAppLogo(): string {
+    const logo = this.appLogoSetting()
+    return logo?.length
+      ? environment.apiBaseUrl.replace(/\/api\/$/, logo)
+      : null
+  }
+
+  get canSaveSettings(): boolean {
+    return (
+      this.permissionsService.currentUserCan(
+        PermissionAction.Change,
+        PermissionType.UISettings
+      ) &&
+      this.permissionsService.currentUserCan(
+        PermissionAction.Add,
+        PermissionType.UISettings
+      )
+    )
+  }
+
+  get canManageAttributes(): boolean {
+    return (
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.Tag
+      ) ||
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.Correspondent
+      ) ||
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.DocumentType
+      ) ||
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.StoragePath
+      ) ||
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.CustomField
+      )
+    )
+  }
+
   get slimSidebarEnabled(): boolean {
-    return this.settingsService.get(SETTINGS_KEYS.SLIM_SIDEBAR)
+    return this.slimSidebarSetting()
   }
 
   set slimSidebarEnabled(enabled: boolean) {
@@ -82,16 +288,105 @@ export class AppFrameComponent implements OnInit, ComponentCanDeactivate {
           this.toastService.showError(
             $localize`An error occurred while saving settings.`
           )
-          console.log(error)
+          console.warn(error)
         },
       })
   }
 
-  closeMenu() {
-    this.isMenuCollapsed = true
+  get slimSidebarPopoversEnabled(): boolean {
+    return this.slimSidebarEnabled && !this.isMobileViewport()
   }
 
-  get openDocuments(): PaperlessDocument[] {
+  get attributesSectionsCollapsed(): boolean {
+    return this.attributesSectionsCollapsedSetting()?.includes(
+      CollapsibleSection.ATTRIBUTES
+    )
+  }
+
+  set attributesSectionsCollapsed(collapsed: boolean) {
+    // TODO: refactor to be able to toggle individual sections, if implemented
+    this.settingsService.set(
+      SETTINGS_KEYS.ATTRIBUTES_SECTIONS_COLLAPSED,
+      collapsed ? [CollapsibleSection.ATTRIBUTES] : []
+    )
+    this.settingsService
+      .storeSettings()
+      .pipe(first())
+      .subscribe({
+        error: (error) => {
+          this.toastService.showError(
+            $localize`An error occurred while saving settings.`
+          )
+          console.warn(error)
+        },
+      })
+  }
+
+  get aiEnabled(): boolean {
+    return this.aiEnabledSetting()
+  }
+
+  @HostListener('window:resize')
+  onWindowResize(): void {
+    if (!this.isMobileViewport()) {
+      this.mobileSearchHidden.set(false)
+    }
+  }
+
+  @HostListener('window:scroll')
+  onWindowScroll(): void {
+    const currentScrollY = window.scrollY
+
+    if (!this.isMobileViewport() || this.isMenuCollapsed() === false) {
+      this.mobileSearchHidden.set(false)
+      this.lastScrollY = currentScrollY
+      return
+    }
+
+    const delta = currentScrollY - this.lastScrollY
+
+    if (currentScrollY <= 0 || delta < -SCROLL_THRESHOLD) {
+      this.mobileSearchHidden.set(false)
+    } else if (currentScrollY > SCROLL_THRESHOLD && delta > SCROLL_THRESHOLD) {
+      this.mobileSearchHidden.set(true)
+    }
+
+    this.lastScrollY = currentScrollY
+  }
+
+  /**
+   * Flag for browsers whose scrollbars take up layout width. Remove me
+   * some day, I hope.
+   */
+  private detectClassicScrollbars(): void {
+    const probe = document.createElement('div')
+    probe.style.cssText =
+      'position:absolute;top:-9999px;width:100px;height:100px;overflow:scroll'
+    document.body.appendChild(probe)
+    document.documentElement.classList.toggle(
+      'pngx-classic-scrollbars',
+      probe.offsetWidth > probe.clientWidth
+    )
+    probe.remove()
+  }
+
+  private isMobileViewport(): boolean {
+    return window.innerWidth < 768
+  }
+
+  closeMenu() {
+    this.isMenuCollapsed.set(true)
+  }
+
+  editProfile() {
+    this.modalService.open(ProfileEditDialogComponent, {
+      backdrop: 'static',
+      size: 'xl',
+    })
+    this.closeMenu()
+  }
+
+  get openDocuments(): Document[] {
     return this.openDocumentsService.getOpenDocuments()
   }
 
@@ -100,62 +395,7 @@ export class AppFrameComponent implements OnInit, ComponentCanDeactivate {
     return !this.openDocumentsService.hasDirty()
   }
 
-  searchField = new FormControl('')
-
-  get searchFieldEmpty(): boolean {
-    return this.searchField.value.trim().length == 0
-  }
-
-  resetSearchField() {
-    this.searchField.reset('')
-  }
-
-  searchFieldKeyup(event: KeyboardEvent) {
-    if (event.key == 'Escape') {
-      this.resetSearchField()
-    }
-  }
-
-  searchAutoComplete = (text$: Observable<string>) =>
-    text$.pipe(
-      debounceTime(200),
-      distinctUntilChanged(),
-      map((term) => {
-        if (term.lastIndexOf(' ') != -1) {
-          return term.substring(term.lastIndexOf(' ') + 1)
-        } else {
-          return term
-        }
-      }),
-      switchMap((term) =>
-        term.length < 2 ? from([[]]) : this.searchService.autocomplete(term)
-      )
-    )
-
-  itemSelected(event) {
-    event.preventDefault()
-    let currentSearch: string = this.searchField.value
-    let lastSpaceIndex = currentSearch.lastIndexOf(' ')
-    if (lastSpaceIndex != -1) {
-      currentSearch = currentSearch.substring(0, lastSpaceIndex + 1)
-      currentSearch += event.item + ' '
-    } else {
-      currentSearch = event.item + ' '
-    }
-    this.searchField.patchValue(currentSearch)
-  }
-
-  search() {
-    this.closeMenu()
-    this.list.quickFilter([
-      {
-        rule_type: FILTER_FULLTEXT_QUERY,
-        value: (this.searchField.value as string).trim(),
-      },
-    ])
-  }
-
-  closeDocument(d: PaperlessDocument) {
+  closeDocument(d: Document) {
     this.openDocumentsService
       .closeDocument(d)
       .pipe(first())
@@ -197,11 +437,33 @@ export class AppFrameComponent implements OnInit, ComponentCanDeactivate {
       })
   }
 
+  onDragStart(event: CdkDragStart) {
+    this.settingsService.globalDropzoneEnabled.set(false)
+  }
+
+  onDragEnd(event: CdkDragEnd) {
+    this.settingsService.globalDropzoneEnabled.set(true)
+  }
+
+  onDrop(event: CdkDragDrop<SavedView[]>) {
+    const sidebarViews = this.savedViewService.sidebarViews.concat([])
+    moveItemInArray(sidebarViews, event.previousIndex, event.currentIndex)
+
+    this.settingsService.updateSidebarViewsSort(sidebarViews).subscribe({
+      next: () => {
+        this.toastService.showInfo($localize`Sidebar views updated`)
+      },
+      error: (e) => {
+        this.toastService.showError($localize`Error updating sidebar views`, e)
+      },
+    })
+  }
+
   private checkForUpdates() {
     this.remoteVersionService
       .checkForUpdates()
       .subscribe((appRemoteVersion: AppRemoteVersion) => {
-        this.appRemoteVersion = appRemoteVersion
+        this.appRemoteVersion.set(appRemoteVersion)
       })
   }
 
@@ -215,11 +477,22 @@ export class AppFrameComponent implements OnInit, ComponentCanDeactivate {
           this.toastService.showError(
             $localize`An error occurred while saving update checking settings.`
           )
-          console.log(error)
+          console.warn(error)
         },
       })
     if (enable) {
       this.checkForUpdates()
     }
+  }
+
+  onLogout() {
+    this.openDocumentsService.closeAll()
+  }
+
+  get showSidebarCounts(): boolean {
+    return (
+      this.sidebarViewsShowCountSetting() &&
+      !this.settingsService.organizingSidebarSavedViews()
+    )
   }
 }

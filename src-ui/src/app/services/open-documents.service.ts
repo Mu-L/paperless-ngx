@@ -1,22 +1,27 @@
-import { Injectable } from '@angular/core'
-import { PaperlessDocument } from '../data/paperless-document'
-import { OPEN_DOCUMENT_SERVICE } from '../data/storage-keys'
-import { DocumentService } from './rest/document.service'
+import { Injectable, inject, signal } from '@angular/core'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
-import { ConfirmDialogComponent } from 'src/app/components/common/confirm-dialog/confirm-dialog.component'
 import { Observable, Subject, of } from 'rxjs'
 import { first } from 'rxjs/operators'
+import { ConfirmDialogComponent } from 'src/app/components/common/confirm-dialog/confirm-dialog.component'
+import { Document } from '../data/document'
+import { OPEN_DOCUMENT_SERVICE } from '../data/storage-keys'
+import { DocumentService } from './rest/document.service'
 
 @Injectable({
   providedIn: 'root',
 })
 export class OpenDocumentsService {
-  private MAX_OPEN_DOCUMENTS = 5
+  private documentService = inject(DocumentService)
+  private modalService = inject(NgbModal)
 
-  constructor(
-    private documentService: DocumentService,
-    private modalService: NgbModal
-  ) {
+  private MAX_OPEN_DOCUMENTS = 5
+  private readonly stateVersion = signal(0)
+
+  constructor() {
+    this.load()
+  }
+
+  public load() {
     if (sessionStorage.getItem(OPEN_DOCUMENT_SERVICE.DOCUMENTS)) {
       try {
         this.openDocuments = JSON.parse(
@@ -29,36 +34,47 @@ export class OpenDocumentsService {
     }
   }
 
-  private openDocuments: PaperlessDocument[] = []
+  private openDocuments: Document[] = []
   private dirtyDocuments: Set<number> = new Set<number>()
+
+  private trackState(): void {
+    this.stateVersion()
+  }
+
+  private markChanged(): void {
+    this.stateVersion.update((version) => version + 1)
+  }
 
   refreshDocument(id: number) {
     let index = this.openDocuments.findIndex((doc) => doc.id == id)
     if (index > -1) {
-      this.documentService.get(id).subscribe(
-        (doc) => {
+      this.documentService.get(id).subscribe({
+        next: (doc) => {
           this.openDocuments[index] = doc
+          this.save()
         },
-        (error) => {
+        error: () => {
           this.openDocuments.splice(index, 1)
           this.save()
-        }
-      )
+        },
+      })
     }
   }
 
-  getOpenDocuments(): PaperlessDocument[] {
+  getOpenDocuments(): Document[] {
+    this.trackState()
     return this.openDocuments
   }
 
-  getOpenDocument(id: number): PaperlessDocument {
+  getOpenDocument(id: number): Document {
+    this.trackState()
     return this.openDocuments.find((d) => d.id == id)
   }
 
-  openDocument(doc: PaperlessDocument): Observable<boolean> {
+  openDocument(doc: Document): Observable<boolean> {
     if (this.openDocuments.find((d) => d.id == doc.id) == null) {
       if (this.openDocuments.length == this.MAX_OPEN_DOCUMENTS) {
-        // at max, ensure changes arent lost
+        // at max, ensure changes aren't lost
         const docToRemove = this.openDocuments[this.MAX_OPEN_DOCUMENTS - 1]
         const closeObservable = this.closeDocument(docToRemove)
         closeObservable.pipe(first()).subscribe((closed) => {
@@ -73,23 +89,39 @@ export class OpenDocumentsService {
     return of(true)
   }
 
-  private finishOpenDocument(doc: PaperlessDocument) {
+  private finishOpenDocument(doc: Document) {
     this.openDocuments.unshift(doc)
     this.dirtyDocuments.delete(doc.id)
     this.save()
   }
 
-  setDirty(doc: PaperlessDocument, dirty: boolean) {
-    if (!this.openDocuments.find((d) => d.id == doc.id)) return
-    if (dirty) this.dirtyDocuments.add(doc.id)
-    else this.dirtyDocuments.delete(doc.id)
+  setDirty(doc: Document, dirty: boolean, changedFields: object = {}) {
+    const existingDoc = this.getOpenDocument(doc.id)
+    if (!existingDoc) return
+    if (dirty) {
+      this.dirtyDocuments.add(doc.id)
+      existingDoc.__changedFields = Object.keys(changedFields).filter(
+        (key) => key !== 'id'
+      )
+    } else {
+      this.dirtyDocuments.delete(doc.id)
+      existingDoc.__changedFields = []
+    }
+
+    this.save()
   }
 
   hasDirty(): boolean {
+    this.trackState()
     return this.dirtyDocuments.size > 0
   }
 
-  closeDocument(doc: PaperlessDocument): Observable<boolean> {
+  isDirty(doc: Document): boolean {
+    this.trackState()
+    return this.dirtyDocuments.has(doc.id)
+  }
+
+  closeDocument(doc: Document): Observable<boolean> {
     let index = this.openDocuments.findIndex((d) => d.id == doc.id)
     if (index == -1) return of(true)
     if (!this.dirtyDocuments.has(doc.id)) {
@@ -110,7 +142,7 @@ export class OpenDocumentsService {
       modal.componentInstance.btnClass = 'btn-warning'
       modal.componentInstance.btnCaption = $localize`Close document`
       modal.componentInstance.confirmClicked.pipe(first()).subscribe(() => {
-        modal.componentInstance.buttonsEnabled = false
+        modal.componentInstance.buttonsEnabled.set(false)
         modal.close()
         this.openDocuments.splice(index, 1)
         this.dirtyDocuments.delete(doc.id)
@@ -133,7 +165,7 @@ export class OpenDocumentsService {
       modal.componentInstance.btnClass = 'btn-warning'
       modal.componentInstance.btnCaption = $localize`Close documents`
       modal.componentInstance.confirmClicked.pipe(first()).subscribe(() => {
-        modal.componentInstance.buttonsEnabled = false
+        modal.componentInstance.buttonsEnabled.set(false)
         modal.close()
         this.openDocuments.splice(0, this.openDocuments.length)
         this.dirtyDocuments.clear()
@@ -151,9 +183,14 @@ export class OpenDocumentsService {
   }
 
   save() {
-    sessionStorage.setItem(
-      OPEN_DOCUMENT_SERVICE.DOCUMENTS,
-      JSON.stringify(this.openDocuments)
-    )
+    this.markChanged()
+    try {
+      sessionStorage.setItem(
+        OPEN_DOCUMENT_SERVICE.DOCUMENTS,
+        JSON.stringify(this.openDocuments)
+      )
+    } catch (e) {
+      console.error('Error saving open documents to session storage', e)
+    }
   }
 }

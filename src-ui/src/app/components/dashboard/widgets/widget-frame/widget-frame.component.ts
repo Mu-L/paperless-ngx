@@ -1,16 +1,30 @@
-import { Component, Input } from '@angular/core'
+import { DragDropModule } from '@angular/cdk/drag-drop'
+import { NgTemplateOutlet } from '@angular/common'
+import { AfterViewInit, Component, input, signal } from '@angular/core'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
 
 @Component({
-  selector: 'app-widget-frame',
+  selector: 'pngx-widget-frame',
   templateUrl: './widget-frame.component.html',
   styleUrls: ['./widget-frame.component.scss'],
+  imports: [DragDropModule, NgxBootstrapIconsModule, NgTemplateOutlet],
 })
-export class WidgetFrameComponent {
-  constructor() {}
+export class WidgetFrameComponent implements AfterViewInit {
+  readonly show = signal(false)
 
-  @Input()
-  title: string
+  loading = input(false)
 
-  @Input()
-  loading: boolean = false
+  title = input<string>()
+
+  titleIcon = input<string>()
+
+  draggable = input<any>()
+
+  cardless = input(false)
+
+  badge = input<string | number>(null)
+
+  ngAfterViewInit(): void {
+    this.show.set(true)
+  }
 }

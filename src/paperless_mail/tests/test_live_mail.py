@@ -1,70 +1,58 @@
-import os
-
 import pytest
-from django.test import TestCase
+
 from paperless_mail.mail import MailAccountHandler
 from paperless_mail.mail import MailError
 from paperless_mail.models import MailAccount
 from paperless_mail.models import MailRule
 
-# Only run if the environment is setup
-# And the environment is not empty (forks, I think)
-@pytest.mark.skipif(
-    "PAPERLESS_MAIL_TEST_HOST" not in os.environ
-    or not len(os.environ["PAPERLESS_MAIL_TEST_HOST"]),
-    reason="Live server testing not enabled",
-)
-class TestMailLiveServer(TestCase):
-    def setUp(self) -> None:
 
-        self.mail_account_handler = MailAccountHandler()
-        self.account = MailAccount.objects.create(
-            name="test",
-            imap_server=os.environ["PAPERLESS_MAIL_TEST_HOST"],
-            username=os.environ["PAPERLESS_MAIL_TEST_USER"],
-            password=os.environ["PAPERLESS_MAIL_TEST_PASSWD"],
-            imap_port=993,
+@pytest.mark.live
+@pytest.mark.greenmail
+@pytest.mark.django_db
+class TestMailGreenmail:
+    """
+    Mail tests using local Greenmail server
+    """
+
+    def test_process_flag(
+        self,
+        mail_account_handler: MailAccountHandler,
+        greenmail_mail_account: MailAccount,
+    ) -> None:
+        """
+        Test processing mail with FLAG action.
+        """
+        rule = MailRule.objects.create(
+            name="testrule",
+            account=greenmail_mail_account,
+            action=MailRule.MailAction.FLAG,
         )
 
-        return super().setUp()
+        try:
+            mail_account_handler.handle_mail_account(greenmail_mail_account)
+        except MailError as e:
+            pytest.fail(f"Failure: {e}")
+        finally:
+            rule.delete()
 
-    def tearDown(self) -> None:
-        self.account.delete()
-        return super().tearDown()
-
-    def test_process_non_gmail_server_flag(self):
+    def test_process_tag(
+        self,
+        mail_account_handler: MailAccountHandler,
+        greenmail_mail_account: MailAccount,
+    ) -> None:
+        """
+        Test processing mail with TAG action.
+        """
+        rule = MailRule.objects.create(
+            name="testrule",
+            account=greenmail_mail_account,
+            action=MailRule.MailAction.TAG,
+            action_parameter="TestTag",
+        )
 
         try:
-            rule1 = MailRule.objects.create(
-                name="testrule",
-                account=self.account,
-                action=MailRule.MailAction.FLAG,
-            )
-
-            self.mail_account_handler.handle_mail_account(self.account)
-
-            rule1.delete()
-
+            mail_account_handler.handle_mail_account(greenmail_mail_account)
         except MailError as e:
-            self.fail(f"Failure: {e}")
-        except Exception as e:
-            pass
-
-    def test_process_non_gmail_server_tag(self):
-
-        try:
-
-            rule2 = MailRule.objects.create(
-                name="testrule",
-                account=self.account,
-                action=MailRule.MailAction.TAG,
-            )
-
-            self.mail_account_handler.handle_mail_account(self.account)
-
-            rule2.delete()
-
-        except MailError as e:
-            self.fail(f"Failure: {e}")
-        except Exception as e:
-            pass
+            pytest.fail(f"Failure: {e}")
+        finally:
+            rule.delete()

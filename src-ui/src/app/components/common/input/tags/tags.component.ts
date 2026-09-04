@@ -1,9 +1,31 @@
-import { Component, forwardRef, Input, OnInit } from '@angular/core'
-import { ControlValueAccessor, NG_VALUE_ACCESSOR } from '@angular/forms'
+import {
+  ChangeDetectorRef,
+  Component,
+  EventEmitter,
+  forwardRef,
+  inject,
+  Input,
+  OnInit,
+  Output,
+  ViewChild,
+} from '@angular/core'
+import {
+  ControlValueAccessor,
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { RouterModule } from '@angular/router'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
-import { TagEditDialogComponent } from '../../edit-dialog/tag-edit-dialog/tag-edit-dialog.component'
+import { NgSelectComponent, NgSelectModule } from '@ng-select/ng-select'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { first, firstValueFrom, tap } from 'rxjs'
+import { Tag } from 'src/app/data/tag'
 import { TagService } from 'src/app/services/rest/tag.service'
+import { matchesSearchText } from 'src/app/utils/text-search'
+import { EditDialogMode } from '../../edit-dialog/edit-dialog.component'
+import { TagEditDialogComponent } from '../../edit-dialog/tag-edit-dialog/tag-edit-dialog.component'
+import { TagComponent } from '../../tag/tag.component'
 
 @Component({
   providers: [
@@ -13,12 +35,24 @@ import { TagService } from 'src/app/services/rest/tag.service'
       multi: true,
     },
   ],
-  selector: 'app-input-tags',
+  selector: 'pngx-input-tags',
   templateUrl: './tags.component.html',
   styleUrls: ['./tags.component.scss'],
+  imports: [
+    TagComponent,
+    NgSelectModule,
+    FormsModule,
+    ReactiveFormsModule,
+    RouterModule,
+    NgxBootstrapIconsModule,
+  ],
 })
 export class TagsComponent implements OnInit, ControlValueAccessor {
-  constructor(private tagService: TagService, private modalService: NgbModal) {
+  private tagService = inject(TagService)
+  private modalService = inject(NgbModal)
+  private readonly changeDetector = inject(ChangeDetectorRef)
+
+  constructor() {
     this.createTagRef = this.createTag.bind(this)
   }
 
@@ -28,6 +62,7 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
 
   writeValue(newValue: number[]): void {
     this.value = newValue
+    this.changeDetector.markForCheck()
   }
   registerOnChange(fn: any): void {
     this.onChange = fn
@@ -37,13 +72,18 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
   }
   setDisabledState?(isDisabled: boolean): void {
     this.disabled = isDisabled
+    this.changeDetector.markForCheck()
   }
 
   ngOnInit(): void {
     this.tagService.listAll().subscribe((result) => {
       this.tags = result.results
+      this.changeDetector.markForCheck()
     })
   }
+
+  @Input()
+  title = $localize`Tags`
 
   @Input()
   disabled = false
@@ -57,13 +97,36 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
   @Input()
   allowCreate: boolean = true
 
-  value: number[]
+  @Input()
+  hideAddButton: boolean = false
 
-  tags: PaperlessTag[]
+  @Input()
+  showFilter: boolean = false
+
+  @Input()
+  horizontal: boolean = false
+
+  @Input()
+  multiple: boolean = true
+
+  @Output()
+  filterDocuments = new EventEmitter<Tag[]>()
+
+  @ViewChild('tagSelect') select: NgSelectComponent
+
+  value: number[] = []
+
+  tags: Tag[] = []
 
   public createTagRef: (name) => void
 
-  private _lastSearchTerm: string
+  public searchFn = (term: string, tag: Tag): boolean =>
+    matchesSearchText(
+      [this.getParentChain(tag?.id).map((parent) => parent.name), tag?.name]
+        .flat()
+        .join(' '),
+      term
+    )
 
   getTag(id: number) {
     if (this.tags) {
@@ -73,34 +136,68 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
     }
   }
 
-  removeTag(event: PointerEvent, id: number) {
-    // prevent opening dropdown
-    event.stopImmediatePropagation()
+  removeTag(tagID: number) {
+    if (this.disabled) return
 
-    let index = this.value.indexOf(id)
+    let index = this.value.indexOf(tagID)
     if (index > -1) {
+      const tag = this.getTag(tagID)
+
+      // remove tag
       let oldValue = this.value
       oldValue.splice(index, 1)
+
+      // remove children
+      oldValue = this.removeChildren(oldValue, tag)
+
       this.value = [...oldValue]
       this.onChange(this.value)
     }
   }
 
-  createTag(name: string = null) {
+  private removeChildren(tagIDs: number[], tag: Tag) {
+    if (tag.children?.length) {
+      const childIDs = new Set(tag.children.map((child) => child.id))
+      tagIDs = tagIDs.filter((id) => !childIDs.has(id))
+      for (const child of tag.children) {
+        tagIDs = this.removeChildren(tagIDs, child)
+      }
+    }
+    return tagIDs
+  }
+
+  public onAdd(tag: Tag) {
+    if (tag?.parent) {
+      // add all parents recursively
+      const parent = this.getTag(tag.parent)
+      if (parent && !this.value.includes(parent.id)) {
+        this.value = [...this.value, parent.id]
+        this.onAdd(parent)
+      }
+    }
+  }
+
+  createTag(name: string = null, add: boolean = false) {
     var modal = this.modalService.open(TagEditDialogComponent, {
       backdrop: 'static',
     })
-    modal.componentInstance.dialogMode = 'create'
+    modal.componentInstance.dialogMode.set(EditDialogMode.CREATE)
     if (name) modal.componentInstance.object = { name: name }
-    else if (this._lastSearchTerm)
-      modal.componentInstance.object = { name: this._lastSearchTerm }
-    modal.componentInstance.succeeded.subscribe((newTag) => {
-      this.tagService.listAll().subscribe((tags) => {
-        this.tags = tags.results
-        this.value = [...this.value, newTag.id]
-        this.onChange(this.value)
-      })
-    })
+    else if (this.select.searchTerm)
+      modal.componentInstance.object = { name: this.select.searchTerm }
+    this.select.filter(null)
+    this.select.detectChanges()
+    return firstValueFrom(
+      (modal.componentInstance as TagEditDialogComponent).succeeded.pipe(
+        first(),
+        tap((newTag) => {
+          this.tagService.listAll().subscribe((tags) => {
+            this.tags = tags.results
+            add && this.addTag(newTag.id)
+          })
+        })
+      )
+    )
   }
 
   getSuggestions() {
@@ -115,20 +212,35 @@ export class TagsComponent implements OnInit, ControlValueAccessor {
 
   addTag(id) {
     this.value = [...this.value, id]
+    this.onAdd(this.getTag(id))
     this.onChange(this.value)
   }
 
-  clearLastSearchTerm() {
-    this._lastSearchTerm = null
+  get hasPrivate(): boolean {
+    return this.value.some(
+      (t) => this.tags?.find((t2) => t2.id === t) === undefined
+    )
   }
 
-  onSearch($event) {
-    this._lastSearchTerm = $event.term
+  onFilterDocuments() {
+    this.filterDocuments.emit(
+      this.tags.filter((t) => this.value.includes(t.id))
+    )
   }
 
-  onBlur() {
-    setTimeout(() => {
-      this.clearLastSearchTerm()
-    }, 3000)
+  getParentChain(id: number): Tag[] {
+    // Returns ancestors from root → immediate parent for a tag id
+    const chain: Tag[] = []
+    let current = this.getTag(id)
+    const guard = new Set<number>()
+    while (current?.parent) {
+      if (guard.has(current.parent)) break
+      guard.add(current.parent)
+      const parent = this.getTag(current.parent)
+      if (!parent) break
+      chain.unshift(parent)
+      current = parent
+    }
+    return chain
   }
 }

@@ -2,16 +2,20 @@
 
 If you feel like contributing to the project, please do! Bug fixes and improvements are always welcome.
 
+⚠️ Please note: Pull requests that implement a new feature or enhancement _should almost always target an existing feature request_ with evidence of community interest and discussion. This is in order to balance the work of implementing and maintaining new features / enhancements. Pull requests that are opened without meeting this requirement may not be merged.
+
 If you want to implement something big:
 
-- Please start a discussion about that in the issues! Maybe something similar is already in development and we can make it happen together.
+- As above, please start with a discussion! Maybe something similar is already in development and we can make it happen together.
 - When making additions to the project, consider if the majority of users will benefit from your change. If not, you're probably better of forking the project.
 - Also consider if your change will get in the way of other users. A good change is a change that enhances the experience of some users who want that change and does not affect users who do not care about the change.
 - Please see the [paperless-ngx merge process](#merging-prs) below.
 
 ## Python
 
-Paperless supports python 3.8 and 3.9. We format Python code with [Black](https://github.com/psf/black).
+Paperless-ngx currently supports Python 3.11, 3.12, 3.13, and 3.14. As a policy, we aim to support at least the three most recent Python versions, and drop support for versions as they reach end-of-life. Older versions may be supported if dependencies permit, but this is not guaranteed.
+
+We format Python code with [ruff](https://docs.astral.sh/ruff/formatter/).
 
 ## Branches
 
@@ -37,6 +41,8 @@ Before you can run `pytest`, ensure to [properly set up your local environment](
 
 Once you have submitted a **P**ull **R**equest it will be reviewed, approved, and merged by one or more community members of any team. Automated code tests and formatting checks must be passed.
 
+Important: Pull requests that implement a new feature or enhancement _should almost always target an existing feature request_ with evidence of community interest and discussion. This is in order to balance the work of implementing and maintaining new features / enhancements. Instead of opening a PR which does not meet this requirement, please open a feature request instead, to gather feedback from both users and the project maintainers.
+
 ## Non-Trivial Requests
 
 PRs deemed `non-trivial` will go through a stricter review process before being merged into `dev`. This is to ensure code quality and complete functionality (free of side effects).
@@ -45,7 +51,7 @@ Examples of `non-trivial` PRs might include:
 
 - Additional features
 - Large changes to many distinct files
-- Breaking or depreciation of existing features
+- Breaking or deprecation of existing features
 
 Our community review process for `non-trivial` PRs is the following:
 
@@ -57,6 +63,13 @@ Our community review process for `non-trivial` PRs is the following:
 4. **At least two** members of the team will approve and finally merge the request into `dev` 🎉.
 
 This process might be slow as community members have different schedules and time to dedicate to the Paperless project. However it ensures community code reviews are as brilliantly thorough as they once were with @jonaswinkler.
+
+# AI-Generated Code
+
+This project does not specifically prohibit the use of AI-generated code _during the process_ of creating a PR, however:
+
+1. Any code present in the final PR that was generated using AI sources should be clearly attributed as such and must not violate copyright protections.
+2. We will not accept PRs that are entirely or mostly AI-derived.
 
 # Translating Paperless-ngx
 
@@ -74,7 +87,7 @@ Some notes about translation:
 
 If a language has already been added, and you would like to contribute new translations or change existing translations, please read the "Translation" section in the README.md file for further details on that.
 
-If you would like the project to be translated to another language, first head over to https://crwd.in/paperless-ngx to check if that language has already been enabled for translation.
+If you would like the project to be translated to another language, first head over to https://crowdin.com/project/paperless-ngx to check if that language has already been enabled for translation.
 If not, please request the language to be added by creating an issue on GitHub. The issue should contain:
 
 - English name of the language (the localized name can be added on Crowdin).
@@ -87,7 +100,7 @@ The following files need to be changed:
 
 - src-ui/angular.json (under the _projects/paperless-ui/i18n/locales_ JSON key)
 - src/paperless/settings.py (in the _LANGUAGES_ array)
-- src-ui/src/app/services/settings.service.ts (inside the _getLanguageOptions_ method)
+- src-ui/src/app/services/settings.service.ts (inside the _LANGUAGE_OPTIONS_ array)
 - src-ui/src/app/app.module.ts (import locale from _angular/common/locales_ and call _registerLocaleData_)
 
 Please add the language in the correct order, alphabetically by locale.
@@ -102,31 +115,31 @@ Paperless-ngx is a community project. We do our best to delegate permission and 
 
 ## Structure
 
-As of writing, there are 21 members in paperless-ngx. 4 of these people have complete administrative privileges to the repo:
+There are currently 2 members in paperless-ngx with complete administrative privileges to the repo:
 
 - [@shamoon](https://github.com/shamoon)
-- [@bauerj](https://github.com/bauerj)
-- [@qcasey](https://github.com/qcasey)
-- [@FrankStrieter](https://github.com/FrankStrieter)
+- [@stumpylog](https://github.com/stumpylog)
 
-There are 5 teams collaborating on specific tasks within paperless-ngx:
-
-- @paperless-ngx/backend (Python / django)
-- @paperless-ngx/frontend (JavaScript / Typescript)
-- @paperless-ngx/ci-cd (GitHub Actions / Deployment)
-- @paperless-ngx/issues (Issue triage)
-- @paperless-ngx/test (General testing for larger PRs)
-
-## Permissions
-
-All team members are notified when mentioned or assigned to a relevant issue or pull request. Additionally, each team has slightly different access to paperless-ngx:
-
-- The **test** team has no special permissions.
-- The **issues** team has `triage` access. This means they can organize issues and pull requests.
-- The **backend**, **frontend**, and **ci-cd** teams have `write` access. This means they can approve PRs and push code, containers, releases, and more.
+There are other members who occasionally contribute but we are actively seeking more dedicated maintainers of the project. Please reach out if you are interested.
 
 ## Joining
 
 We are not overly strict with inviting people to the organization. If you have read the [team permissions](#permissions) and think having additional access would enhance your contributions, please reach out to an [admin](#structure) of the team.
 
 The admins occasionally invite contributors directly if we believe having them on a team will accelerate their work.
+
+# Automatic Repository Maintenance
+
+The Paperless-ngx team appreciates all effort and interest from the community in filing bug reports, creating feature requests, sharing ideas and helping other
+community members. That said, in an effort to keep the repository organized and manageable the project uses automatic handling of certain areas:
+
+- Issues that cannot be reproduced will be marked 'stale' after 7 days of inactivity and closed after 14 further days of inactivity.
+- Issues, pull requests and discussions that are closed will be locked after 30 days of inactivity.
+- Discussions with a marked answer will be automatically closed.
+- Discussions in the 'General' or 'Support' categories will be closed after 180 days of inactivity.
+- Feature requests that do not meet the following thresholds will be closed: 180 days of inactivity with less than 80 "up-votes", < 5 "up-votes" after 180 days, < 20 "up-votes" after 1 year or < 40 "up-votes" at 2 years.
+
+In all cases, threads can be re-opened by project maintainers and, of course, users can always create a new discussion for related concerns.
+Finally, remember that all information remains searchable and 'closed' feature requests can still serve as inspiration for new features.
+
+Thank you all for your contributions.

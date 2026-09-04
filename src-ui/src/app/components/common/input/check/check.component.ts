@@ -1,6 +1,11 @@
-import { Component, forwardRef, Input, OnInit } from '@angular/core'
-import { ControlValueAccessor, NG_VALUE_ACCESSOR } from '@angular/forms'
-import { v4 as uuidv4 } from 'uuid'
+import { NgClass } from '@angular/common'
+import { Component, forwardRef } from '@angular/core'
+import {
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
 import { AbstractInputComponent } from '../abstract-input'
 
 @Component({
@@ -11,9 +16,10 @@ import { AbstractInputComponent } from '../abstract-input'
       multi: true,
     },
   ],
-  selector: 'app-input-check',
+  selector: 'pngx-input-check',
   templateUrl: './check.component.html',
   styleUrls: ['./check.component.scss'],
+  imports: [FormsModule, ReactiveFormsModule, NgClass, NgxBootstrapIconsModule],
 })
 export class CheckComponent extends AbstractInputComponent<boolean> {
   constructor() {

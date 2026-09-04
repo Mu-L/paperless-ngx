@@ -1,6 +1,23 @@
 import { ParamMap, Params } from '@angular/router'
+import {
+  CustomFieldQueryLogicalOperator,
+  CustomFieldQueryOperator,
+} from '../data/custom-field-query'
 import { FilterRule } from '../data/filter-rule'
-import { FilterRuleType, FILTER_RULE_TYPES } from '../data/filter-rule-type'
+import {
+  FILTER_CUSTOM_FIELDS_QUERY,
+  FILTER_HAS_CUSTOM_FIELDS_ALL,
+  FILTER_HAS_CUSTOM_FIELDS_ANY,
+  FILTER_RULE_TYPES,
+  FILTER_SIMPLE_TEXT,
+  FILTER_SIMPLE_TITLE,
+  FILTER_TITLE,
+  FILTER_TITLE_CONTENT,
+  FilterRuleType,
+  NEGATIVE_NULL_FILTER_VALUE,
+  SIMPLE_TEXT_PARAMETER,
+  SIMPLE_TITLE_PARAMETER,
+} from '../data/filter-rule-type'
 import { ListViewState } from '../services/document-list-view.service'
 
 const SORT_FIELD_PARAMETER = 'sort'
@@ -18,7 +35,7 @@ export function paramsFromViewState(
   params[PAGE_PARAMETER] = isNaN(viewState.currentPage)
     ? 1
     : viewState.currentPage
-  if (pageOnly && viewState.currentPage == 1) params[PAGE_PARAMETER] = null
+  if (pageOnly && viewState.currentPage == 1) params[PAGE_PARAMETER] = undefined
   return params
 }
 
@@ -40,9 +57,54 @@ export function paramsToViewState(queryParams: ParamMap): ListViewState {
   }
 }
 
+export function transformLegacyFilterRules(
+  filterRules: FilterRule[]
+): FilterRule[] {
+  const LEGACY_CUSTOM_FIELD_FILTER_RULE_TYPES = [
+    FILTER_HAS_CUSTOM_FIELDS_ANY,
+    FILTER_HAS_CUSTOM_FIELDS_ALL,
+  ]
+  if (
+    filterRules.filter((rule) =>
+      LEGACY_CUSTOM_FIELD_FILTER_RULE_TYPES.includes(rule.rule_type)
+    ).length
+  ) {
+    const anyRules = filterRules.filter(
+      (rule) => rule.rule_type === FILTER_HAS_CUSTOM_FIELDS_ANY
+    )
+    const allRules = filterRules.filter(
+      (rule) => rule.rule_type === FILTER_HAS_CUSTOM_FIELDS_ALL
+    )
+    const customFieldQueryLogicalOperator = allRules.length
+      ? CustomFieldQueryLogicalOperator.And
+      : CustomFieldQueryLogicalOperator.Or
+    const valueRules = allRules.length ? allRules : anyRules
+    const customFieldQueryExpression = [
+      customFieldQueryLogicalOperator,
+      [
+        ...valueRules.map((rule) => [
+          parseInt(rule.value),
+          CustomFieldQueryOperator.Exists,
+          true,
+        ]),
+      ],
+    ]
+    filterRules.push({
+      rule_type: FILTER_CUSTOM_FIELDS_QUERY,
+      value: JSON.stringify(customFieldQueryExpression),
+    })
+  }
+  // TODO: can we support FILTER_DOES_NOT_HAVE_CUSTOM_FIELDS or FILTER_HAS_ANY_CUSTOM_FIELDS?
+  return filterRules.filter(
+    (rule) => !LEGACY_CUSTOM_FIELD_FILTER_RULE_TYPES.includes(rule.rule_type)
+  )
+}
+
 export function filterRulesFromQueryParams(
   queryParams: ParamMap
 ): FilterRule[] {
+  let filterRulesFromQueryParams: FilterRule[] = []
+
   const allFilterRuleQueryParams: string[] = FILTER_RULE_TYPES.map(
     (rt) => rt.filtervar
   )
@@ -50,7 +112,6 @@ export function filterRulesFromQueryParams(
     .filter((rt) => rt !== undefined)
 
   // transform query params to filter rules
-  let filterRulesFromQueryParams: FilterRule[] = []
   allFilterRuleQueryParams
     .filter((frqp) => queryParams.has(frqp))
     .forEach((filterQueryParamName) => {
@@ -60,6 +121,10 @@ export function filterRulesFromQueryParams(
           rt.isnull_filtervar == filterQueryParamName
       )
       const isNullRuleType = rule_type.isnull_filtervar == filterQueryParamName
+      const nullRuleValue =
+        queryParams.get(filterQueryParamName) == '1'
+          ? null
+          : NEGATIVE_NULL_FILTER_VALUE.toString()
       const valueURIComponent: string = queryParams.get(filterQueryParamName)
       const filterQueryParamValues: string[] = rule_type.multi
         ? valueURIComponent.split(',')
@@ -72,12 +137,14 @@ export function filterRulesFromQueryParams(
             val = val.replace('1', 'true').replace('0', 'false')
           return {
             rule_type: rule_type.id,
-            value: isNullRuleType ? null : val,
+            value: isNullRuleType ? nullRuleValue : val,
           }
         })
       )
     })
-
+  filterRulesFromQueryParams = transformLegacyFilterRules(
+    filterRulesFromQueryParams
+  )
   return filterRulesFromQueryParams
 }
 
@@ -86,12 +153,27 @@ export function queryParamsFromFilterRules(filterRules: FilterRule[]): Params {
     let params = {}
     for (let rule of filterRules) {
       let ruleType = FILTER_RULE_TYPES.find((t) => t.id == rule.rule_type)
-      if (ruleType.multi) {
+      if (
+        rule.rule_type === FILTER_TITLE_CONTENT ||
+        rule.rule_type === FILTER_SIMPLE_TEXT
+      ) {
+        params[SIMPLE_TEXT_PARAMETER] = rule.value
+      } else if (
+        rule.rule_type === FILTER_TITLE ||
+        rule.rule_type === FILTER_SIMPLE_TITLE
+      ) {
+        params[SIMPLE_TITLE_PARAMETER] = rule.value
+      } else if (ruleType.isnull_filtervar && rule.value == null) {
+        params[ruleType.isnull_filtervar] = 1
+      } else if (
+        ruleType.isnull_filtervar &&
+        rule.value == NEGATIVE_NULL_FILTER_VALUE.toString()
+      ) {
+        params[ruleType.isnull_filtervar] = 0
+      } else if (ruleType.multi) {
         params[ruleType.filtervar] = params[ruleType.filtervar]
           ? params[ruleType.filtervar] + ',' + rule.value
           : rule.value
-      } else if (ruleType.isnull_filtervar && rule.value == null) {
-        params[ruleType.isnull_filtervar] = 1
       } else {
         params[ruleType.filtervar] = rule.value
         if (ruleType.datatype == 'boolean')

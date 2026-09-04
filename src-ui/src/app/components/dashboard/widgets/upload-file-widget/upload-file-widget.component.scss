@@ -1,5 +1,23 @@
-form {
-  position: relative;
+:host ::ng-deep i-bs svg {
+  margin-top: -3px;
+}
+
+.btn-outline-dark {
+  --bs-btn-border-color: var(--bs-border-color-translucent);
+  border-style: dashed;
+  border-width: 1px;
+  min-height: 5.25rem;
+  background: color-mix(in srgb, var(--bs-primary) 4%, var(--bs-light)) !important;
+
+  &:hover,
+  &:focus {
+    border-color: var(--bs-primary);
+    background: color-mix(in srgb, var(--bs-primary) 9%, var(--bs-light)) !important;
+  }
+}
+
+.smaller {
+  font-size: 0.75rem;
 }
 
 .alert-heading {
@@ -16,7 +34,7 @@ form {
 .btn-open {
   line-height: 1;
 
-  svg {
+  i-bs {
     margin-top: -1px;
   }
 }
@@ -34,4 +52,16 @@ form {
 
 ::ng-deep .ngx-file-drop__drop-zone--over {
   background-color: var(--pngx-primary-faded) !important;
+}
+
+.consumer-status-card {
+  background-color: rgba(var(--bs-body-bg-rgb), .95) !important;
+}
+
+.consumer-status-list {
+  max-height: calc(100vh - 312px); // e.g. below the upload button, mobile
+
+  @media screen and (min-width: 768px) {
+    max-height: calc(100vh - 208px); // e.g. below the upload button
+  }
 }

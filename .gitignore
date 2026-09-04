@@ -22,6 +22,7 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+/src/paperless_mail/templates/node_modules
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -39,10 +40,12 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.uv-cache
 nosetests.xml
 coverage.xml
 *,cover
 .pytest_cache
+junit.xml
 
 # Translations
 *.mo
@@ -51,7 +54,7 @@ coverage.xml
 # Django stuff:
 *.log
 
-# MkDocs documentation
+# Zensical documentation
 site/
 
 # PyBuilder
@@ -65,6 +68,8 @@ target/
 .vscode
 /src-ui/.vscode
 /docs/.vscode
+.vscode-server
+*CommandMarker
 
 # Other stuff that doesn't belong
 .virtualenv
@@ -73,6 +78,8 @@ virtualenv
 .venv/
 /docker-compose.env
 /docker-compose.yml
+.ruff_cache/
+.mypy_cache/
 
 # Used for development
 scripts/import-for-development
@@ -96,3 +103,15 @@ scripts/nuke
 
 # celery schedule file
 celerybeat-schedule*
+
+# ignore .devcontainer sub folders
+/.devcontainer/consume/
+/.devcontainer/data/
+/.devcontainer/media/
+/.devcontainer/redisdata/
+
+# ignore pnpm package store folder created when setting up the devcontainer
+.pnpm-store/
+
+# Git worktree local folder
+.worktrees

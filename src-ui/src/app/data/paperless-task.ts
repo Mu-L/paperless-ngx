@@ -1,33 +1,73 @@
 import { ObjectWithId } from './object-with-id'
 
 export enum PaperlessTaskType {
-  // just file tasks, for now
-  File = 'file',
+  ConsumeFile = 'consume_file',
+  TrainClassifier = 'train_classifier',
+  SanityCheck = 'sanity_check',
+  MailFetch = 'mail_fetch',
+  LlmIndex = 'llm_index',
+  EmptyTrash = 'empty_trash',
+  CheckWorkflows = 'check_workflows',
+  BulkUpdate = 'bulk_update',
+  ReprocessDocument = 'reprocess_document',
+  BuildShareLink = 'build_share_link',
+  BulkDelete = 'bulk_delete',
+}
+
+export enum PaperlessTaskTriggerSource {
+  Scheduled = 'scheduled',
+  WebUI = 'web_ui',
+  ApiUpload = 'api_upload',
+  FolderConsume = 'folder_consume',
+  EmailConsume = 'email_consume',
+  System = 'system',
+  Manual = 'manual',
 }
 
 export enum PaperlessTaskStatus {
-  Pending = 'PENDING',
-  Started = 'STARTED',
-  Complete = 'SUCCESS',
-  Failed = 'FAILURE',
+  Pending = 'pending',
+  Started = 'started',
+  Success = 'success',
+  Failure = 'failure',
+  Revoked = 'revoked',
 }
 
 export interface PaperlessTask extends ObjectWithId {
-  type: PaperlessTaskType
-
-  status: PaperlessTaskStatus
-
-  acknowledged: boolean
-
   task_id: string
-
-  task_file_name: string
-
+  task_type: PaperlessTaskType
+  task_type_display: string
+  trigger_source: PaperlessTaskTriggerSource
+  trigger_source_display: string
+  status: PaperlessTaskStatus
+  status_display: string
   date_created: Date
-
+  date_started?: Date
   date_done?: Date
+  duration_seconds?: number
+  wait_time_seconds?: number
+  input_data: Record<string, any>
+  result_data?: Record<string, any>
+  related_document_ids: number[]
+  acknowledged: boolean
+  owner?: number
+}
 
-  result?: string
+export interface PaperlessTaskSummary {
+  task_type: PaperlessTaskType
+  total_count: number
+  pending_count: number
+  success_count: number
+  failure_count: number
+  avg_duration_seconds: number | null
+  avg_wait_time_seconds: number | null
+  last_run: Date | null
+  last_success: Date | null
+  last_failure: Date | null
+}
 
-  related_document?: number
+export interface PaperlessTaskStatusCounts {
+  all: number
+  needs_attention: number
+  in_progress: number
+  completed: number
 }

@@ -1,20 +1,15 @@
-import { CanDeactivate } from '@angular/router'
-import { Injectable } from '@angular/core'
-import { first, Observable, Subject } from 'rxjs'
-import { DocumentListComponent } from '../components/document-list/document-list.component'
+import { inject, Injectable } from '@angular/core'
 import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
+import { first, Observable, Subject } from 'rxjs'
 import { ConfirmDialogComponent } from '../components/common/confirm-dialog/confirm-dialog.component'
+import { DocumentListComponent } from '../components/document-list/document-list.component'
+import { SETTINGS_KEYS } from '../data/ui-settings'
 import { SettingsService } from '../services/settings.service'
-import { SETTINGS_KEYS } from '../data/paperless-uisettings'
 
 @Injectable()
-export class DirtySavedViewGuard
-  implements CanDeactivate<DocumentListComponent>
-{
-  constructor(
-    private modalService: NgbModal,
-    private settings: SettingsService
-  ) {}
+export class DirtySavedViewGuard {
+  private modalService = inject(NgbModal)
+  private settings = inject(SettingsService)
 
   canDeactivate(
     component: DocumentListComponent
@@ -41,12 +36,12 @@ export class DirtySavedViewGuard
     modal.componentInstance.alternativeBtnClass = 'btn-primary'
     modal.componentInstance.alternativeBtnCaption = $localize`Save and close`
     modal.componentInstance.alternativeClicked.pipe(first()).subscribe(() => {
-      modal.componentInstance.buttonsEnabled = false
+      modal.componentInstance.buttonsEnabled.set(false)
       component.saveViewConfig()
       modal.close()
     })
     modal.componentInstance.confirmClicked.pipe(first()).subscribe(() => {
-      modal.componentInstance.buttonsEnabled = false
+      modal.componentInstance.buttonsEnabled.set(false)
       modal.close()
     })
 

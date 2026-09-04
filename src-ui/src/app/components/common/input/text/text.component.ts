@@ -1,5 +1,11 @@
-import { Component, forwardRef } from '@angular/core'
-import { NG_VALUE_ACCESSOR } from '@angular/forms'
+import { Component, Input, forwardRef } from '@angular/core'
+import {
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { RouterLink } from '@angular/router'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
 import { AbstractInputComponent } from '../abstract-input'
 
 @Component({
@@ -10,12 +16,36 @@ import { AbstractInputComponent } from '../abstract-input'
       multi: true,
     },
   ],
-  selector: 'app-input-text',
+  selector: 'pngx-input-text',
   templateUrl: './text.component.html',
   styleUrls: ['./text.component.scss'],
+  imports: [
+    FormsModule,
+    ReactiveFormsModule,
+    NgxBootstrapIconsModule,
+    RouterLink,
+  ],
 })
 export class TextComponent extends AbstractInputComponent<string> {
+  @Input()
+  autocomplete: string = 'off'
+
+  @Input()
+  placeholder: string = ''
+
+  @Input()
+  suggestion: string = ''
+
   constructor() {
     super()
+  }
+
+  getSuggestion() {
+    return this.value !== this.suggestion ? this.suggestion : ''
+  }
+
+  applySuggestion() {
+    this.value = this.suggestion
+    this.onChange(this.value)
   }
 }

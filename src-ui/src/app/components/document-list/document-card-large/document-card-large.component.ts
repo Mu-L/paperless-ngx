@@ -1,32 +1,78 @@
+import { AsyncPipe, NgOptimizedImage } from '@angular/common'
 import {
+  AfterViewInit,
   Component,
   EventEmitter,
-  Input,
   Output,
   ViewChild,
+  inject,
+  input,
 } from '@angular/core'
-import { PaperlessDocument } from 'src/app/data/paperless-document'
+import { RouterModule } from '@angular/router'
+import {
+  NgbProgressbarModule,
+  NgbTooltipModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import {
+  DEFAULT_DISPLAY_FIELDS,
+  DisplayField,
+  Document,
+} from 'src/app/data/document'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
+import { CorrespondentNamePipe } from 'src/app/pipes/correspondent-name.pipe'
+import { CustomDatePipe } from 'src/app/pipes/custom-date.pipe'
+import { DocumentTitlePipe } from 'src/app/pipes/document-title.pipe'
+import { DocumentTypeNamePipe } from 'src/app/pipes/document-type-name.pipe'
+import { IsNumberPipe } from 'src/app/pipes/is-number.pipe'
+import { StoragePathNamePipe } from 'src/app/pipes/storage-path-name.pipe'
+import { UsernamePipe } from 'src/app/pipes/username.pipe'
 import { DocumentService } from 'src/app/services/rest/document.service'
 import { SettingsService } from 'src/app/services/settings.service'
-import { NgbPopover } from '@ng-bootstrap/ng-bootstrap'
-import { SETTINGS_KEYS } from 'src/app/data/paperless-uisettings'
+import { CustomFieldDisplayComponent } from '../../common/custom-field-display/custom-field-display.component'
+import { PreviewPopupComponent } from '../../common/preview-popup/preview-popup.component'
+import { TagComponent } from '../../common/tag/tag.component'
+import { LoadingComponentWithPermissions } from '../../loading-component/loading.component'
 
 @Component({
-  selector: 'app-document-card-large',
+  selector: 'pngx-document-card-large',
   templateUrl: './document-card-large.component.html',
-  styleUrls: [
-    './document-card-large.component.scss',
-    '../popover-preview/popover-preview.scss',
+  styleUrls: ['./document-card-large.component.scss'],
+  imports: [
+    DocumentTitlePipe,
+    IsNumberPipe,
+    PreviewPopupComponent,
+    TagComponent,
+    CustomFieldDisplayComponent,
+    AsyncPipe,
+    NgOptimizedImage,
+    UsernamePipe,
+    CorrespondentNamePipe,
+    DocumentTypeNamePipe,
+    StoragePathNamePipe,
+    IfPermissionsDirective,
+    CustomDatePipe,
+    RouterModule,
+    NgbTooltipModule,
+    NgbProgressbarModule,
+    NgxBootstrapIconsModule,
   ],
 })
-export class DocumentCardLargeComponent {
-  constructor(
-    private documentService: DocumentService,
-    private settingsService: SettingsService
-  ) {}
+export class DocumentCardLargeComponent
+  extends LoadingComponentWithPermissions
+  implements AfterViewInit
+{
+  private documentService = inject(DocumentService)
+  settingsService = inject(SettingsService)
+  readonly selected = input(false)
+  readonly priority = input(false)
+  readonly displayFields = input<string[]>(
+    DEFAULT_DISPLAY_FIELDS.map((f) => f.id)
+  )
+  readonly document = input<Document>(undefined)
 
-  @Input()
-  selected = false
+  DisplayField = DisplayField
 
   @Output()
   toggleSelected = new EventEmitter()
@@ -35,8 +81,8 @@ export class DocumentCardLargeComponent {
     return this.toggleSelected.observers.length > 0
   }
 
-  @Input()
-  document: PaperlessDocument
+  @Output()
+  dblClickDocument = new EventEmitter()
 
   @Output()
   clickTag = new EventEmitter<number>()
@@ -53,16 +99,21 @@ export class DocumentCardLargeComponent {
   @Output()
   clickMoreLike = new EventEmitter()
 
-  @ViewChild('popover') popover: NgbPopover
+  @ViewChild('popupPreview') popupPreview: PreviewPopupComponent
 
   mouseOnPreview = false
   popoverHidden = true
 
+  ngAfterViewInit(): void {
+    this.show.set(true)
+  }
+
   get searchScoreClass() {
-    if (this.document.__search_hit__) {
-      if (this.document.__search_hit__.score > 0.7) {
+    const document = this.document()
+    if (document.__search_hit__) {
+      if (document.__search_hit__.score > 0.7) {
         return 'success'
-      } else if (this.document.__search_hit__.score > 0.3) {
+      } else if (document.__search_hit__.score > 0.3) {
         return 'warning'
       } else {
         return 'danger'
@@ -70,18 +121,14 @@ export class DocumentCardLargeComponent {
     }
   }
 
-  get searchCommentHighlights() {
+  get searchNoteHighlights() {
     let highlights = []
-    if (
-      this.document['__search_hit__'] &&
-      this.document['__search_hit__'].comment_highlights
-    ) {
-      // only show comments with a match
-      highlights = (
-        this.document['__search_hit__'].comment_highlights as string
-      )
+    const document = this.document()
+    if (document?.['__search_hit__']?.note_highlights) {
+      // only show notes with a match
+      highlights = (document['__search_hit__'].note_highlights as string)
         .split(',')
-        .filter((higlight) => higlight.includes('<span'))
+        .filter((highlight) => highlight.includes('<span'))
     }
     return highlights
   }
@@ -91,46 +138,38 @@ export class DocumentCardLargeComponent {
   }
 
   getThumbUrl() {
-    return this.documentService.getThumbUrl(this.document.id)
+    return this.documentService.getThumbUrl(this.document().id)
   }
 
   getDownloadUrl() {
-    return this.documentService.getDownloadUrl(this.document.id)
-  }
-
-  get previewUrl() {
-    return this.documentService.getPreviewUrl(this.document.id)
-  }
-
-  mouseEnterPreview() {
-    this.mouseOnPreview = true
-    if (!this.popover.isOpen()) {
-      // we're going to open but hide to pre-load content during hover delay
-      this.popover.open()
-      this.popoverHidden = true
-      setTimeout(() => {
-        if (this.mouseOnPreview) {
-          // show popover
-          this.popoverHidden = false
-        } else {
-          this.popover.close()
-        }
-      }, 600)
-    }
-  }
-
-  mouseLeavePreview() {
-    this.mouseOnPreview = false
+    return this.documentService.getDownloadUrl(this.document().id)
   }
 
   mouseLeaveCard() {
-    this.popover.close()
+    this.popupPreview?.close()
   }
 
   get contentTrimmed() {
+    const document = this.document()
     return (
-      this.document.content.substr(0, 500) +
-      (this.document.content.length > 500 ? '...' : '')
+      document.content.substring(0, 500) +
+      (document.content.length > 500 ? '...' : '')
     )
+  }
+
+  get hasSearchHighlights() {
+    return Boolean(this.document()?.__search_hit__?.highlights?.trim()?.length)
+  }
+
+  get shouldShowContentFallback() {
+    const document = this.document()
+    return (
+      document?.__search_hit__?.score == null ||
+      (!this.hasSearchHighlights && this.searchNoteHighlights.length === 0)
+    )
+  }
+
+  get notesEnabled(): boolean {
+    return this.settingsService.get(SETTINGS_KEYS.NOTES_ENABLED)
   }
 }

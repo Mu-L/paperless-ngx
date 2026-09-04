@@ -1,6 +1,13 @@
-a {
+a, span {
     cursor: pointer;
     white-space: normal;
     word-break: break-word;
-    text-align: end;
+    text-align: start;
+}
+
+.private {
+    background-color: #000000;
+    color: #ffffff;
+    opacity: .5;
+    font-style: italic;
 }

@@ -1,174 +1,286 @@
+"""Tests for the sanity checker module.
+
+Tests exercise ``check_sanity`` as a whole, verifying document validation,
+orphan detection, and the iter_wrapper contract.
+"""
+
+from __future__ import annotations
+
 import logging
-import os
-import shutil
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import filelock
-from django.conf import settings
-from django.test import TestCase
-from documents.models import Document
+import pytest
+
+from documents.sanity_checker import SanityCheckMessages
 from documents.sanity_checker import check_sanity
-from documents.tests.utils import DirectoriesMixin
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from documents.models import Document
+    from documents.tests.conftest import PaperlessDirs
 
 
-class TestSanityCheck(DirectoriesMixin, TestCase):
-    def make_test_data(self):
+class TestSanityCheckMessages:
+    def test_document_counts_are_unique_per_severity(self) -> None:
+        messages = SanityCheckMessages()
 
-        with filelock.FileLock(settings.MEDIA_LOCK):
-            # just make sure that the lockfile is present.
-            shutil.copy(
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "samples",
-                    "documents",
-                    "originals",
-                    "0000001.pdf",
-                ),
-                os.path.join(self.dirs.originals_dir, "0000001.pdf"),
-            )
-            shutil.copy(
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "samples",
-                    "documents",
-                    "archive",
-                    "0000001.pdf",
-                ),
-                os.path.join(self.dirs.archive_dir, "0000001.pdf"),
-            )
-            shutil.copy(
-                os.path.join(
-                    os.path.dirname(__file__),
-                    "samples",
-                    "documents",
-                    "thumbnails",
-                    "0000001.webp",
-                ),
-                os.path.join(self.dirs.thumbnail_dir, "0000001.webp"),
-            )
+        messages.error(1, "first error")
+        messages.error(1, "second error")
+        messages.warning(1, "first warning")
+        messages.warning(1, "second warning")
+        messages.info(1, "first info")
+        messages.info(1, "second info")
+        messages.warning(None, "global warning")
 
-        return Document.objects.create(
-            title="test",
-            checksum="42995833e01aea9b3edee44bbfdd7ce1",
-            archive_checksum="62acb0bcbfbcaa62ca6ad3668e4e404b",
-            content="test",
-            pk=1,
-            filename="0000001.pdf",
-            mime_type="application/pdf",
-            archive_filename="0000001.pdf",
-        )
+        assert messages.document_count == 1
+        assert messages.document_error_count == 1
+        assert messages.document_warning_count == 1
+        assert messages.document_info_count == 1
+        assert messages.global_warning_count == 1
+        assert messages.total_issue_count == 5
 
-    def assertSanityError(self, doc: Document, messageRegex):
+
+@pytest.mark.django_db
+class TestCheckSanityNoDocuments:
+    """Sanity checks against an empty archive."""
+
+    @pytest.mark.usefixtures("_media_settings")
+    def test_no_documents(self) -> None:
         messages = check_sanity()
-        self.assertTrue(messages.has_error)
-        with self.assertLogs() as capture:
+        assert not messages.has_error
+        assert not messages.has_warning
+        assert messages.total_issue_count == 0
+
+    @pytest.mark.usefixtures("_media_settings")
+    def test_no_issues_logs_clean(self, caplog: pytest.LogCaptureFixture) -> None:
+        messages = check_sanity()
+        with caplog.at_level(logging.INFO, logger="paperless.sanity_checker"):
             messages.log_messages()
-            self.assertEqual(
-                capture.records[0].message,
-                f"Detected following issue(s) with document #{doc.pk}, titled {doc.title}",
-            )
-            self.assertRegex(capture.records[1].message, messageRegex)
+        assert "Sanity checker detected no issues." in caplog.text
 
-    def test_no_issues(self):
-        self.make_test_data()
+
+@pytest.mark.django_db
+class TestCheckSanityHealthyDocument:
+    def test_no_errors(self, sample_doc: Document) -> None:
         messages = check_sanity()
-        self.assertFalse(messages.has_error)
-        self.assertFalse(messages.has_warning)
-        with self.assertLogs() as capture:
+        assert not messages.has_error
+        assert not messages.has_warning
+        assert messages.total_issue_count == 0
+
+
+@pytest.mark.django_db
+class TestCheckSanityThumbnail:
+    def test_missing(self, sample_doc: Document) -> None:
+        Path(sample_doc.thumbnail_path).unlink()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "Thumbnail of document does not exist" in m["message"]
+            for m in messages[sample_doc.pk]
+        )
+
+    def test_unreadable(self, sample_doc: Document) -> None:
+        thumb = Path(sample_doc.thumbnail_path)
+        thumb.chmod(0o000)
+        try:
+            messages = check_sanity()
+            assert messages.has_error
+            assert any(
+                "Cannot read thumbnail" in m["message"] for m in messages[sample_doc.pk]
+            )
+        finally:
+            thumb.chmod(0o644)
+
+
+@pytest.mark.django_db
+class TestCheckSanityOriginal:
+    def test_missing(self, sample_doc: Document) -> None:
+        Path(sample_doc.source_path).unlink()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "Original of document does not exist" in m["message"]
+            for m in messages[sample_doc.pk]
+        )
+
+    def test_checksum_mismatch(self, sample_doc: Document) -> None:
+        sample_doc.checksum = "badhash"
+        sample_doc.save()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "Checksum mismatch" in m["message"] and "badhash" in m["message"]
+            for m in messages[sample_doc.pk]
+        )
+
+    def test_unreadable(self, sample_doc: Document) -> None:
+        src = Path(sample_doc.source_path)
+        src.chmod(0o000)
+        try:
+            messages = check_sanity()
+            assert messages.has_error
+            assert any(
+                "Cannot read original" in m["message"] for m in messages[sample_doc.pk]
+            )
+        finally:
+            src.chmod(0o644)
+
+
+@pytest.mark.django_db
+class TestCheckSanityArchive:
+    def test_checksum_without_filename(self, sample_doc: Document) -> None:
+        sample_doc.archive_filename = None
+        sample_doc.save()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "checksum, but no archive filename" in m["message"]
+            for m in messages[sample_doc.pk]
+        )
+
+    def test_filename_without_checksum(self, sample_doc: Document) -> None:
+        sample_doc.archive_checksum = None
+        sample_doc.save()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "checksum is missing" in m["message"] for m in messages[sample_doc.pk]
+        )
+
+    def test_missing_file(self, sample_doc: Document) -> None:
+        Path(sample_doc.archive_path).unlink()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "Archived version of document does not exist" in m["message"]
+            for m in messages[sample_doc.pk]
+        )
+
+    def test_checksum_mismatch(self, sample_doc: Document) -> None:
+        sample_doc.archive_checksum = "wronghash"
+        sample_doc.save()
+        messages = check_sanity()
+        assert messages.has_error
+        assert any(
+            "Checksum mismatch of archived document" in m["message"]
+            for m in messages[sample_doc.pk]
+        )
+
+    def test_unreadable(self, sample_doc: Document) -> None:
+        archive = Path(sample_doc.archive_path)
+        archive.chmod(0o000)
+        try:
+            messages = check_sanity()
+            assert messages.has_error
+            assert any(
+                "Cannot read archive" in m["message"] for m in messages[sample_doc.pk]
+            )
+        finally:
+            archive.chmod(0o644)
+
+    def test_no_archive_at_all(self, sample_doc: Document) -> None:
+        """Document with neither archive checksum nor filename is valid."""
+        Path(sample_doc.archive_path).unlink()
+        sample_doc.archive_checksum = None
+        sample_doc.archive_filename = None
+        sample_doc.save()
+        messages = check_sanity()
+        assert not messages.has_error
+
+
+@pytest.mark.django_db
+class TestCheckSanityContent:
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param("", id="empty-string"),
+        ],
+    )
+    def test_no_content(self, sample_doc: Document, content: str) -> None:
+        sample_doc.content = content
+        sample_doc.save()
+        messages = check_sanity()
+        assert not messages.has_error
+        assert not messages.has_warning
+        assert any("no OCR data" in m["message"] for m in messages[sample_doc.pk])
+
+
+@pytest.mark.django_db
+class TestCheckSanityOrphans:
+    def test_orphaned_file(
+        self,
+        sample_doc: Document,
+        paperless_dirs: PaperlessDirs,
+    ) -> None:
+        (paperless_dirs.originals / "orphan.pdf").touch()
+        messages = check_sanity()
+        assert messages.has_warning
+        assert any("Orphaned file" in m["message"] for m in messages[None])
+
+    @pytest.mark.usefixtures("_media_settings")
+    def test_ignorable_files_not_flagged(
+        self,
+        paperless_dirs: PaperlessDirs,
+    ) -> None:
+        (paperless_dirs.media / ".DS_Store").touch()
+        (paperless_dirs.media / "desktop.ini").touch()
+        messages = check_sanity()
+        assert not messages.has_warning
+
+
+@pytest.mark.django_db
+class TestCheckSanityIterWrapper:
+    def test_wrapper_receives_documents(self, sample_doc: Document) -> None:
+        seen: list[Document] = []
+
+        def tracking(iterable: Iterable[Document]) -> Iterable[Document]:
+            for item in iterable:
+                seen.append(item)
+                yield item
+
+        check_sanity(iter_wrapper=tracking)
+        assert len(seen) == 1
+        assert seen[0].pk == sample_doc.pk
+
+    def test_default_works_without_wrapper(self, sample_doc: Document) -> None:
+        messages = check_sanity()
+        assert not messages.has_error
+
+
+@pytest.mark.django_db
+class TestCheckSanityLogMessages:
+    def test_logs_doc_issues(
+        self,
+        sample_doc: Document,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        Path(sample_doc.source_path).unlink()
+        messages = check_sanity()
+        with caplog.at_level(logging.INFO, logger="paperless.sanity_checker"):
             messages.log_messages()
-            self.assertEqual(len(capture.output), 1)
-            self.assertEqual(capture.records[0].levelno, logging.INFO)
-            self.assertEqual(
-                capture.records[0].message,
-                "Sanity checker detected no issues.",
-            )
+        assert f"document #{sample_doc.pk}" in caplog.text
+        assert "Original of document does not exist" in caplog.text
 
-    def test_no_docs(self):
-        self.assertEqual(len(check_sanity()), 0)
-
-    def test_success(self):
-        self.make_test_data()
-        self.assertEqual(len(check_sanity()), 0)
-
-    def test_no_thumbnail(self):
-        doc = self.make_test_data()
-        os.remove(doc.thumbnail_path)
-        self.assertSanityError(doc, "Thumbnail of document does not exist")
-
-    def test_thumbnail_no_access(self):
-        doc = self.make_test_data()
-        os.chmod(doc.thumbnail_path, 0o000)
-        self.assertSanityError(doc, "Cannot read thumbnail file of document")
-        os.chmod(doc.thumbnail_path, 0o777)
-
-    def test_no_original(self):
-        doc = self.make_test_data()
-        os.remove(doc.source_path)
-        self.assertSanityError(doc, "Original of document does not exist.")
-
-    def test_original_no_access(self):
-        doc = self.make_test_data()
-        os.chmod(doc.source_path, 0o000)
-        self.assertSanityError(doc, "Cannot read original file of document")
-        os.chmod(doc.source_path, 0o777)
-
-    def test_original_checksum_mismatch(self):
-        doc = self.make_test_data()
-        doc.checksum = "WOW"
-        doc.save()
-        self.assertSanityError(doc, "Checksum mismatch. Stored: WOW, actual: ")
-
-    def test_no_archive(self):
-        doc = self.make_test_data()
-        os.remove(doc.archive_path)
-        self.assertSanityError(doc, "Archived version of document does not exist.")
-
-    def test_archive_no_access(self):
-        doc = self.make_test_data()
-        os.chmod(doc.archive_path, 0o000)
-        self.assertSanityError(doc, "Cannot read archive file of document")
-        os.chmod(doc.archive_path, 0o777)
-
-    def test_archive_checksum_mismatch(self):
-        doc = self.make_test_data()
-        doc.archive_checksum = "WOW"
-        doc.save()
-        self.assertSanityError(doc, "Checksum mismatch of archived document")
-
-    def test_empty_content(self):
-        doc = self.make_test_data()
-        doc.content = ""
-        doc.save()
+    def test_logs_global_issues(
+        self,
+        sample_doc: Document,
+        paperless_dirs: PaperlessDirs,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        (paperless_dirs.originals / "orphan.pdf").touch()
         messages = check_sanity()
-        self.assertFalse(messages.has_error)
-        self.assertFalse(messages.has_warning)
-        self.assertEqual(len(messages), 1)
-        self.assertRegex(
-            messages[doc.pk][0]["message"],
-            "Document contains no OCR data",
-        )
+        with caplog.at_level(logging.WARNING, logger="paperless.sanity_checker"):
+            messages.log_messages()
+        assert "Orphaned file" in caplog.text
 
-    def test_orphaned_file(self):
-        doc = self.make_test_data()
-        Path(self.dirs.originals_dir, "orphaned").touch()
+    @pytest.mark.usefixtures("_media_settings")
+    def test_logs_unknown_doc_pk(self, caplog: pytest.LogCaptureFixture) -> None:
+        """A doc PK not in the DB logs 'Unknown' as the title."""
         messages = check_sanity()
-        self.assertTrue(messages.has_warning)
-        self.assertRegex(
-            messages._messages[None][0]["message"],
-            "Orphaned file in media dir",
-        )
-
-    def test_archive_filename_no_checksum(self):
-        doc = self.make_test_data()
-        doc.archive_checksum = None
-        doc.save()
-        self.assertSanityError(doc, "has an archive file, but its checksum is missing.")
-
-    def test_archive_checksum_no_filename(self):
-        doc = self.make_test_data()
-        doc.archive_filename = None
-        doc.save()
-        self.assertSanityError(
-            doc,
-            "has an archive file checksum, but no archive filename.",
-        )
+        messages.error(99999, "Ghost document")
+        with caplog.at_level(logging.INFO, logger="paperless.sanity_checker"):
+            messages.log_messages()
+        assert "#99999" in caplog.text
+        assert "Unknown" in caplog.text

@@ -1,38 +1,156 @@
 import {
+  CdkVirtualScrollViewport,
+  ScrollingModule,
+} from '@angular/cdk/scrolling'
+import { NgClass } from '@angular/common'
+import {
   Component,
+  ElementRef,
   EventEmitter,
   Input,
+  OnInit,
   Output,
-  ElementRef,
   ViewChild,
+  inject,
+  signal,
 } from '@angular/core'
-import { FilterPipe } from 'src/app/pipes/filter.pipe'
-import { NgbDropdown } from '@ng-bootstrap/ng-bootstrap'
-import { ToggleableItemState } from './toggleable-dropdown-button/toggleable-dropdown-button.component'
+import { FormsModule, ReactiveFormsModule } from '@angular/forms'
+import {
+  NgbDropdown,
+  NgbDropdownModule,
+  NgbModalRef,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { Subject, filter, first, merge, takeUntil } from 'rxjs'
+import { NEGATIVE_NULL_FILTER_VALUE } from 'src/app/data/filter-rule-type'
 import { MatchingModel } from 'src/app/data/matching-model'
-import { Subject } from 'rxjs'
+import { ObjectWithPermissions } from 'src/app/data/object-with-permissions'
+import { SelectionDataItem } from 'src/app/data/results'
+import { FilterPipe } from 'src/app/pipes/filter.pipe'
+import { HotKeyService } from 'src/app/services/hot-key.service'
+import { pngxPopperOptions } from 'src/app/utils/popper-options'
+import { LoadingComponentWithPermissions } from '../../loading-component/loading.component'
+import { ClearableBadgeComponent } from '../clearable-badge/clearable-badge.component'
+import {
+  ToggleableDropdownButtonComponent,
+  ToggleableItemState,
+} from './toggleable-dropdown-button/toggleable-dropdown-button.component'
 
 export interface ChangedItems {
   itemsToAdd: MatchingModel[]
   itemsToRemove: MatchingModel[]
 }
 
+type BranchSummary = {
+  items: MatchingModel[]
+  firstIndex: number
+  special: boolean
+  selected: boolean
+  hasDocs: boolean
+}
+
+export enum LogicalOperator {
+  And = 'and',
+  Or = 'or',
+}
+
+export enum Intersection {
+  Include = 'include',
+  Exclude = 'exclude',
+}
+
 export class FilterableDropdownSelectionModel {
   changed = new Subject<FilterableDropdownSelectionModel>()
 
-  multiple = false
-  private _logicalOperator = 'and'
-  temporaryLogicalOperator = this._logicalOperator
+  manyToOne = false
+  singleSelect = false
 
-  items: MatchingModel[] = []
+  private readonly _logicalOperator = signal(LogicalOperator.And)
+  readonly temporaryLogicalOperator = signal(LogicalOperator.And)
+  private readonly _intersection = signal(Intersection.Include)
+  readonly temporaryIntersection = signal(Intersection.Include)
+  private readonly _documentCounts = signal<SelectionDataItem[]>([])
+  private readonly _items = signal<MatchingModel[]>([])
+  private readonly _selectionStates = signal(
+    new Map<number, ToggleableItemState>()
+  )
+  private readonly _temporarySelectionStates = signal(
+    new Map<number, ToggleableItemState>()
+  )
 
-  get itemsSorted(): MatchingModel[] {
-    // TODO: this is getting called very often
-    return this.items.sort((a, b) => {
-      if (a.id == null && b.id != null) {
+  public documentCountSortingEnabled = false
+
+  private get selectionStates(): ReadonlyMap<number, ToggleableItemState> {
+    return this._selectionStates()
+  }
+
+  private get temporarySelectionStates(): ReadonlyMap<
+    number,
+    ToggleableItemState
+  > {
+    return this._temporarySelectionStates()
+  }
+
+  public set documentCounts(counts: SelectionDataItem[]) {
+    this._documentCounts.set(counts)
+    if (this.documentCountSortingEnabled) {
+      this._items.set(this.sortItems(this.items))
+    }
+  }
+
+  get items(): MatchingModel[] {
+    return this._items()
+  }
+
+  set items(items: MatchingModel[]) {
+    if (items) {
+      this._items.set(this.withNullItem(this.sortItems(Array.from(items))))
+    }
+  }
+
+  private withNullItem(items: MatchingModel[]): MatchingModel[] {
+    if (this.manyToOne && this.logicalOperator === LogicalOperator.Or) {
+      return items[0]?.id === null ? items.slice(1) : items
+    }
+
+    const nullItem = {
+      name: $localize`:Filter drop down element to filter for documents with no correspondent/type/tag assigned:Not assigned`,
+      id:
+        this.manyToOne || this.intersection === Intersection.Include
+          ? null
+          : NEGATIVE_NULL_FILTER_VALUE,
+    }
+
+    return items[0]?.id === null || items[0]?.id === NEGATIVE_NULL_FILTER_VALUE
+      ? [nullItem, ...items.slice(1)]
+      : [nullItem, ...items]
+  }
+
+  constructor(manyToOne: boolean = false) {
+    this.manyToOne = manyToOne
+  }
+
+  private sortItems(items: MatchingModel[]): MatchingModel[] {
+    const sorted = [...items].sort((a, b) => {
+      if (
+        (a.id == null && b.id != null) ||
+        (a.id == NEGATIVE_NULL_FILTER_VALUE &&
+          b.id != NEGATIVE_NULL_FILTER_VALUE)
+      ) {
         return -1
-      } else if (a.id != null && b.id == null) {
+      } else if (
+        (a.id != null && b.id == null) ||
+        (a.id != NEGATIVE_NULL_FILTER_VALUE &&
+          b.id == NEGATIVE_NULL_FILTER_VALUE)
+      ) {
         return 1
+      }
+
+      // Preserve hierarchical order when provided (e.g., Tags)
+      const ao = (a as any)['orderIndex']
+      const bo = (b as any)['orderIndex']
+      if (ao !== undefined && bo !== undefined) {
+        return ao - bo
       } else if (
         this.getNonTemporary(a.id) == ToggleableItemState.NotSelected &&
         this.getNonTemporary(b.id) != ToggleableItemState.NotSelected
@@ -43,15 +161,27 @@ export class FilterableDropdownSelectionModel {
         this.getNonTemporary(b.id) == ToggleableItemState.NotSelected
       ) {
         return -1
+      } else if (
+        this._documentCounts().length &&
+        this.getDocumentCount(b.id) === 0 &&
+        this.getDocumentCount(a.id) > this.getDocumentCount(b.id)
+      ) {
+        return -1
+      } else if (
+        this._documentCounts().length &&
+        this.getDocumentCount(a.id) === 0 &&
+        this.getDocumentCount(a.id) < this.getDocumentCount(b.id)
+      ) {
+        return 1
       } else {
         return a.name.localeCompare(b.name)
       }
     })
+
+    return this._documentCounts().length
+      ? this.promoteBranchesWithDocumentCounts(sorted)
+      : sorted
   }
-
-  private selectionStates = new Map<number, ToggleableItemState>()
-
-  private temporarySelectionStates = new Map<number, ToggleableItemState>()
 
   getSelectedItems() {
     return this.items.filter(
@@ -68,48 +198,68 @@ export class FilterableDropdownSelectionModel {
   }
 
   set(id: number, state: ToggleableItemState, fireEvent = true) {
+    const states = new Map(this.temporarySelectionStates)
     if (state == ToggleableItemState.NotSelected) {
-      this.temporarySelectionStates.delete(id)
+      states.delete(id)
     } else {
-      this.temporarySelectionStates.set(id, state)
+      states.set(id, state)
     }
+    this._temporarySelectionStates.set(states)
     if (fireEvent) {
       this.changed.next(this)
     }
   }
 
   toggle(id: number, fireEvent = true) {
-    let state = this.temporarySelectionStates.get(id)
+    const states = new Map(this.temporarySelectionStates)
+    let state = states.get(id)
     if (
-      state == null ||
+      state == undefined ||
       (state != ToggleableItemState.Selected &&
         state != ToggleableItemState.Excluded)
     ) {
-      this.temporarySelectionStates.set(id, ToggleableItemState.Selected)
+      if (this.manyToOne || this.singleSelect) {
+        states.set(id, ToggleableItemState.Selected)
+
+        if (this.singleSelect) {
+          for (let key of states.keys()) {
+            if (key != id) {
+              states.delete(key)
+            }
+          }
+        }
+      } else {
+        let newState =
+          this.intersection == Intersection.Include
+            ? ToggleableItemState.Selected
+            : ToggleableItemState.Excluded
+        if (!id) newState = ToggleableItemState.Selected
+        if (
+          state == ToggleableItemState.Excluded &&
+          this.intersection == Intersection.Exclude
+        ) {
+          newState = ToggleableItemState.NotSelected
+        }
+        states.set(id, newState)
+      }
     } else if (
       state == ToggleableItemState.Selected ||
       state == ToggleableItemState.Excluded
     ) {
-      this.temporarySelectionStates.delete(id)
-    }
-
-    if (!this.multiple) {
-      for (let key of this.temporarySelectionStates.keys()) {
-        if (key != id) {
-          this.temporarySelectionStates.delete(key)
-        }
-      }
+      states.delete(id)
+      this.clearDescendantSelections(states, id)
     }
 
     if (!id) {
-      for (let key of this.temporarySelectionStates.keys()) {
+      for (let key of states.keys()) {
         if (key) {
-          this.temporarySelectionStates.delete(key)
+          states.delete(key)
         }
       }
     } else {
-      this.temporarySelectionStates.delete(null)
+      states.delete(null)
     }
+    this._temporarySelectionStates.set(states)
 
     if (fireEvent) {
       this.changed.next(this)
@@ -117,21 +267,47 @@ export class FilterableDropdownSelectionModel {
   }
 
   exclude(id: number, fireEvent: boolean = true) {
-    let state = this.temporarySelectionStates.get(id)
-    if (state == null || state != ToggleableItemState.Excluded) {
-      this.temporarySelectionStates.set(id, ToggleableItemState.Excluded)
-      this.temporaryLogicalOperator = this._logicalOperator = 'and'
-    } else if (state == ToggleableItemState.Excluded) {
-      this.temporarySelectionStates.delete(id)
-    }
+    const states = new Map(this.temporarySelectionStates)
+    let state = states.get(id)
+    if (id && (state == null || state != ToggleableItemState.Excluded)) {
+      const operator = this.manyToOne ? LogicalOperator.And : LogicalOperator.Or
+      this.temporaryLogicalOperator.set(operator)
+      this._logicalOperator.set(operator)
 
-    if (!this.multiple) {
-      for (let key of this.temporarySelectionStates.keys()) {
-        if (key != id) {
-          this.temporarySelectionStates.delete(key)
+      if (this.manyToOne || this.singleSelect) {
+        states.set(id, ToggleableItemState.Excluded)
+        this.clearDescendantSelections(states, id)
+
+        if (this.singleSelect) {
+          for (let key of states.keys()) {
+            if (key != id) {
+              states.delete(key)
+            }
+          }
+        }
+      } else {
+        let newState =
+          this.intersection == Intersection.Include
+            ? ToggleableItemState.Selected
+            : ToggleableItemState.Excluded
+        if (
+          state == ToggleableItemState.Selected &&
+          this.intersection == Intersection.Include
+        ) {
+          newState = ToggleableItemState.NotSelected
+        }
+        states.set(id, newState)
+        if (newState == ToggleableItemState.Excluded) {
+          this.clearDescendantSelections(states, id)
         }
       }
+    } else if (!id || state == ToggleableItemState.Excluded) {
+      states.delete(id)
+      if (id) {
+        this.clearDescendantSelections(states, id)
+      }
     }
+    this._temporarySelectionStates.set(states)
 
     if (fireEvent) {
       this.changed.next(this)
@@ -142,15 +318,80 @@ export class FilterableDropdownSelectionModel {
     return this.selectionStates.get(id) || ToggleableItemState.NotSelected
   }
 
-  get logicalOperator(): string {
-    return this.temporaryLogicalOperator
+  private clearDescendantSelections(
+    states: Map<number, ToggleableItemState>,
+    id: number
+  ) {
+    for (const descendantID of this.getDescendantIDs(id)) {
+      states.delete(descendantID)
+    }
   }
 
-  set logicalOperator(operator: string) {
-    this.temporaryLogicalOperator = operator
+  private getDescendantIDs(id: number): number[] {
+    const descendants: number[] = []
+    const queue: number[] = [id]
+
+    while (queue.length) {
+      const parentID = queue.shift()
+      for (const item of this.items) {
+        if (
+          typeof item?.id === 'number' &&
+          typeof (item as any)['parent'] === 'number' &&
+          (item as any)['parent'] === parentID
+        ) {
+          descendants.push(item.id)
+          queue.push(item.id)
+        }
+      }
+    }
+
+    return descendants
+  }
+
+  get logicalOperator(): LogicalOperator {
+    return this.temporaryLogicalOperator()
+  }
+
+  set logicalOperator(operator: LogicalOperator) {
+    this.temporaryLogicalOperator.set(operator)
+    this._items.set(this.withNullItem(this.items))
   }
 
   toggleOperator() {
+    this.changed.next(this)
+  }
+
+  get intersection(): Intersection {
+    return this.temporaryIntersection()
+  }
+
+  set intersection(intersection: Intersection) {
+    this.temporaryIntersection.set(intersection)
+    this._items.set(this.withNullItem(this.items))
+  }
+
+  toggleIntersection() {
+    if (this.temporarySelectionStates.size === 0) return
+    let newState =
+      this.intersection == Intersection.Include
+        ? ToggleableItemState.Selected
+        : ToggleableItemState.Excluded
+
+    const states = new Map(this.temporarySelectionStates)
+    states.forEach((state, key) => {
+      if (key === null && this.intersection === Intersection.Exclude) {
+        states.set(NEGATIVE_NULL_FILTER_VALUE, newState)
+      } else if (
+        key === NEGATIVE_NULL_FILTER_VALUE &&
+        this.intersection === Intersection.Include
+      ) {
+        states.set(null, newState)
+      } else {
+        states.set(key, newState)
+      }
+    })
+    this._temporarySelectionStates.set(states)
+
     this.changed.next(this)
   }
 
@@ -169,8 +410,12 @@ export class FilterableDropdownSelectionModel {
   }
 
   clear(fireEvent = true) {
-    this.temporarySelectionStates.clear()
-    this.temporaryLogicalOperator = this._logicalOperator = 'and'
+    this._temporarySelectionStates.set(new Map())
+    this.temporaryLogicalOperator.set(LogicalOperator.And)
+    this._logicalOperator.set(LogicalOperator.And)
+    this.temporaryIntersection.set(Intersection.Include)
+    this._intersection.set(Intersection.Include)
+    this._items.set(this.withNullItem(this.items))
     if (fireEvent) {
       this.changed.next(this)
     }
@@ -191,7 +436,9 @@ export class FilterableDropdownSelectionModel {
       )
     ) {
       return true
-    } else if (this.temporaryLogicalOperator !== this._logicalOperator) {
+    } else if (this.temporaryLogicalOperator() !== this._logicalOperator()) {
+      return true
+    } else if (this.temporaryIntersection() !== this._intersection()) {
       return true
     } else {
       return false
@@ -200,29 +447,219 @@ export class FilterableDropdownSelectionModel {
 
   isNoneSelected() {
     return (
-      this.selectionSize() == 1 &&
-      this.get(null) == ToggleableItemState.Selected
+      (this.selectionSize() == 1 &&
+        this.get(null) == ToggleableItemState.Selected) ||
+      (this.intersection == Intersection.Exclude &&
+        this.get(NEGATIVE_NULL_FILTER_VALUE) == ToggleableItemState.Excluded)
     )
   }
 
-  init(map) {
-    this.temporarySelectionStates = map
+  getDocumentCount(id: number) {
+    return this._documentCounts().find((c) => c.id === id)?.document_count
+  }
+
+  private promoteBranchesWithDocumentCounts(
+    items: MatchingModel[]
+  ): MatchingModel[] {
+    const parentById = this.buildParentById(items)
+    const findRootId = this.createRootFinder(parentById)
+    const getRootDocCount = this.createRootDocCounter(items)
+    const summaries = this.buildBranchSummaries(
+      items,
+      findRootId,
+      getRootDocCount
+    )
+    const orderedBranches = this.orderBranchesByPriority(summaries)
+
+    return orderedBranches.flatMap((summary) => summary.items)
+  }
+
+  private buildParentById(items: MatchingModel[]): Map<number, number | null> {
+    const parentById = new Map<number, number | null>()
+
+    for (const item of items) {
+      if (typeof item?.id === 'number') {
+        const parentValue = (item as any)['parent']
+        parentById.set(
+          item.id,
+          typeof parentValue === 'number' ? parentValue : null
+        )
+      }
+    }
+
+    return parentById
+  }
+
+  private createRootFinder(
+    parentById: Map<number, number | null>
+  ): (id: number) => number {
+    const rootMemo = new Map<number, number>()
+
+    const findRootId = (id: number): number => {
+      const cached = rootMemo.get(id)
+      if (cached !== undefined) {
+        return cached
+      }
+
+      const parentId = parentById.get(id)
+      if (parentId === undefined || parentId === null) {
+        rootMemo.set(id, id)
+        return id
+      }
+
+      const rootId = findRootId(parentId)
+      rootMemo.set(id, rootId)
+      return rootId
+    }
+
+    return findRootId
+  }
+
+  private createRootDocCounter(
+    items: MatchingModel[]
+  ): (rootId: number) => number {
+    const docCountMemo = new Map<number, number>()
+
+    return (rootId: number): number => {
+      const cached = docCountMemo.get(rootId)
+      if (cached !== undefined) {
+        return cached
+      }
+
+      const explicit = this.getDocumentCount(rootId)
+      if (typeof explicit === 'number') {
+        docCountMemo.set(rootId, explicit)
+        return explicit
+      }
+
+      const rootItem = items.find((i) => i.id === rootId)
+      const fallback =
+        typeof (rootItem as any)?.['document_count'] === 'number'
+          ? (rootItem as any)['document_count']
+          : 0
+
+      docCountMemo.set(rootId, fallback)
+      return fallback
+    }
+  }
+
+  private buildBranchSummaries(
+    items: MatchingModel[],
+    findRootId: (id: number) => number,
+    getRootDocCount: (rootId: number) => number
+  ): Map<string, BranchSummary> {
+    const summaries = new Map<string, BranchSummary>()
+
+    for (const [index, item] of items.entries()) {
+      const { key, special, rootId } = this.describeBranchItem(
+        item,
+        index,
+        findRootId
+      )
+
+      let summary = summaries.get(key)
+      if (!summary) {
+        summary = {
+          items: [],
+          firstIndex: index,
+          special,
+          selected: false,
+          hasDocs:
+            special || rootId === null ? false : getRootDocCount(rootId) > 0,
+        }
+        summaries.set(key, summary)
+      }
+
+      summary.items.push(item)
+
+      if (this.shouldMarkSummarySelected(summary, item)) {
+        summary.selected = true
+      }
+    }
+
+    return summaries
+  }
+
+  private describeBranchItem(
+    item: MatchingModel,
+    index: number,
+    findRootId: (id: number) => number
+  ): { key: string; special: boolean; rootId: number | null } {
+    if (item?.id === null) {
+      return { key: 'null', special: true, rootId: null }
+    }
+
+    if (item?.id === NEGATIVE_NULL_FILTER_VALUE) {
+      return { key: 'neg-null', special: true, rootId: null }
+    }
+
+    if (typeof item?.id === 'number') {
+      const rootId = findRootId(item.id)
+      return { key: `root-${rootId}`, special: false, rootId }
+    }
+
+    return { key: `misc-${index}`, special: false, rootId: null }
+  }
+
+  private shouldMarkSummarySelected(
+    summary: BranchSummary,
+    item: MatchingModel
+  ): boolean {
+    if (summary.special) {
+      return false
+    }
+
+    if (typeof item?.id !== 'number') {
+      return false
+    }
+
+    return this.getNonTemporary(item.id) !== ToggleableItemState.NotSelected
+  }
+
+  private orderBranchesByPriority(
+    summaries: Map<string, BranchSummary>
+  ): BranchSummary[] {
+    return Array.from(summaries.values()).sort((a, b) => {
+      const rankDiff = this.branchRank(a) - this.branchRank(b)
+      if (rankDiff !== 0) {
+        return rankDiff
+      }
+      if (a.hasDocs !== b.hasDocs) {
+        return a.hasDocs ? -1 : 1
+      }
+      return a.firstIndex - b.firstIndex
+    })
+  }
+
+  private branchRank(summary: BranchSummary): number {
+    if (summary.special) {
+      return -1
+    }
+    if (summary.selected) {
+      return 0
+    }
+    return 1
+  }
+
+  init(map: Map<number, ToggleableItemState>) {
+    this._temporarySelectionStates.set(new Map(map))
     this.apply()
   }
 
   apply() {
-    this.selectionStates.clear()
-    this.temporarySelectionStates.forEach((value, key) => {
-      this.selectionStates.set(key, value)
-    })
-    this._logicalOperator = this.temporaryLogicalOperator
+    this._selectionStates.set(new Map(this.temporarySelectionStates))
+    this._logicalOperator.set(this.temporaryLogicalOperator())
+    this._intersection.set(this.temporaryIntersection())
+    this._items.set(this.sortItems(this.items))
   }
 
-  reset() {
-    this.temporarySelectionStates.clear()
-    this.selectionStates.forEach((value, key) => {
-      this.temporarySelectionStates.set(key, value)
-    })
+  reset(complete: boolean = false) {
+    if (complete) {
+      this._selectionStates.set(new Map())
+      this._temporarySelectionStates.set(new Map())
+    } else {
+      this._temporarySelectionStates.set(new Map(this.selectionStates))
+    }
   }
 
   diff(): ChangedItems {
@@ -243,40 +680,58 @@ export class FilterableDropdownSelectionModel {
 }
 
 @Component({
-  selector: 'app-filterable-dropdown',
+  selector: 'pngx-filterable-dropdown',
   templateUrl: './filterable-dropdown.component.html',
   styleUrls: ['./filterable-dropdown.component.scss'],
+  imports: [
+    ClearableBadgeComponent,
+    ToggleableDropdownButtonComponent,
+    FormsModule,
+    ReactiveFormsModule,
+    NgxBootstrapIconsModule,
+    NgbDropdownModule,
+    NgClass,
+    ScrollingModule,
+  ],
 })
-export class FilterableDropdownComponent {
+export class FilterableDropdownComponent
+  extends LoadingComponentWithPermissions
+  implements OnInit
+{
+  public readonly FILTERABLE_BUTTON_HEIGHT_PX = 42
+
+  private filterPipe = inject(FilterPipe)
+  private hotkeyService = inject(HotKeyService)
+
   @ViewChild('listFilterTextInput') listFilterTextInput: ElementRef
   @ViewChild('dropdown') dropdown: NgbDropdown
+  @ViewChild('buttonsViewport') buttonsViewport: CdkVirtualScrollViewport
+
+  private get renderedButtons(): Array<HTMLButtonElement> {
+    return Array.from(
+      this.buttonsViewport.elementRef.nativeElement.querySelectorAll('button')
+    )
+  }
+
+  public popperOptions = pngxPopperOptions
 
   filterText: string
 
-  @Input()
-  set items(items: MatchingModel[]) {
-    if (items) {
-      this._selectionModel.items = Array.from(items)
-      this._selectionModel.items.unshift({
-        name: $localize`:Filter drop down element to filter for documents with no correspondent/type/tag assigned:Not assigned`,
-        id: null,
-      })
-    }
-  }
+  _selectionModel: FilterableDropdownSelectionModel
 
   get items(): MatchingModel[] {
     return this._selectionModel.items
   }
 
-  _selectionModel = new FilterableDropdownSelectionModel()
-
-  @Input()
+  @Input({ required: true })
   set selectionModel(model: FilterableDropdownSelectionModel) {
     if (this.selectionModel) {
       this.selectionModel.changed.complete()
       model.items = this.selectionModel.items
-      model.multiple = this.selectionModel.multiple
+      model.manyToOne = this.selectionModel.manyToOne
+      model.singleSelect = this._editing && !model.manyToOne
     }
+    model.documentCountSortingEnabled = this._editing
     model.changed.subscribe((updatedModel) => {
       this.selectionModelChange.next(updatedModel)
     })
@@ -290,13 +745,8 @@ export class FilterableDropdownComponent {
   @Output()
   selectionModelChange = new EventEmitter<FilterableDropdownSelectionModel>()
 
-  @Input()
-  set multiple(value: boolean) {
-    this.selectionModel.multiple = value
-  }
-
-  get multiple() {
-    return this.selectionModel.multiple
+  get manyToOne() {
+    return this.selectionModel.manyToOne
   }
 
   @Input()
@@ -311,11 +761,48 @@ export class FilterableDropdownComponent {
   @Input()
   allowSelectNone: boolean = false
 
+  private _editing = false
+
   @Input()
-  editing = false
+  set editing(value: boolean) {
+    this._editing = value
+    if (this.selectionModel) {
+      this.selectionModel.singleSelect =
+        this._editing && !this.selectionModel.manyToOne
+      this.selectionModel.documentCountSortingEnabled = this._editing
+    }
+  }
+
+  get editing() {
+    return this._editing
+  }
 
   @Input()
   applyOnClose = false
+
+  @Input()
+  disabled = false
+
+  @Input()
+  createRef: (name: string) => NgbModalRef
+
+  @Input()
+  set documentCounts(counts: SelectionDataItem[]) {
+    if (counts) {
+      this.selectionModel.documentCounts = counts
+    }
+  }
+
+  @Input()
+  shortcutKey: string
+
+  @Input()
+  extraButtonTitle: string
+
+  @Input()
+  showExtraButtonIfEmpty: boolean = false
+
+  readonly creating = signal(false)
 
   @Output()
   apply = new EventEmitter<ChangedItems>()
@@ -323,20 +810,63 @@ export class FilterableDropdownComponent {
   @Output()
   opened = new EventEmitter()
 
-  get operatorToggleEnabled(): boolean {
-    return (
-      this.selectionModel.selectionSize() > 1 &&
-      this.selectionModel.getExcludedItems().length == 0
+  @Output()
+  extraButton = new EventEmitter<ChangedItems>()
+
+  get modifierToggleEnabled(): boolean {
+    return this.manyToOne
+      ? this.selectionModel.selectionSize() > 1 &&
+          this.selectionModel.getExcludedItems().length == 0
+      : true
+  }
+
+  get name(): string {
+    return this.title ? this.title.replace(/\s/g, '_').toLowerCase() : null
+  }
+
+  readonly modelIsDirty = signal(false)
+
+  private keyboardIndex: number
+
+  public get filteredItems(): MatchingModel[] {
+    return this.filterPipe
+      .transform(this.items, this.filterText, 'name')
+      .filter((item) => this.allowSelectNone || Boolean(item.id))
+  }
+
+  public get scrollViewportHeight(): number {
+    return Math.min(
+      this.filteredItems.length * this.FILTERABLE_BUTTON_HEIGHT_PX,
+      400
     )
   }
 
-  modelIsDirty: boolean = false
-
-  constructor(private filterPipe: FilterPipe) {
-    this.selectionModel = new FilterableDropdownSelectionModel()
+  constructor() {
+    super()
     this.selectionModelChange.subscribe((updatedModel) => {
-      this.modelIsDirty = updatedModel.isDirty()
+      this.modelIsDirty.set(updatedModel.isDirty())
     })
+  }
+
+  ngOnInit(): void {
+    if (this.shortcutKey) {
+      this.hotkeyService
+        .addShortcut({
+          keys: this.shortcutKey,
+          description: $localize`Open ${this.title} filter`,
+        })
+        .pipe(
+          takeUntil(this.unsubscribeNotifier),
+          filter(() => !this.disabled)
+        )
+        .subscribe(() => {
+          this.dropdown.open()
+        })
+    }
+  }
+
+  public trackByItem(index: number, item: MatchingModel) {
+    return item?.id ?? index
   }
 
   applyClicked() {
@@ -348,32 +878,59 @@ export class FilterableDropdownComponent {
     }
   }
 
+  createClicked() {
+    this.creating.set(true)
+    const modal = this.createRef(this.filterText)
+    merge(modal.closed, modal.dismissed)
+      .pipe(first(), takeUntil(this.unsubscribeNotifier))
+      .subscribe(() => this.creating.set(false))
+  }
+
   dropdownOpenChange(open: boolean): void {
     if (open) {
+      // Dont let a create modal close this
+      if (this.creating()) return
+
       setTimeout(() => {
-        this.listFilterTextInput.nativeElement.focus()
+        this.listFilterTextInput?.nativeElement.focus()
+        this.buttonsViewport?.checkViewportSize()
       }, 0)
       if (this.editing) {
         this.selectionModel.reset()
+        this.modelIsDirty.set(false)
       }
+      this.selectionModel.singleSelect =
+        this.editing && !this.selectionModel.manyToOne
       this.opened.next(this)
     } else {
-      this.filterText = ''
-      if (this.applyOnClose && this.selectionModel.isDirty()) {
-        this.apply.emit(this.selectionModel.diff())
+      if (this.creating()) {
+        this.dropdown?.open()
+      } else {
+        this.filterText = ''
+        if (this.applyOnClose && this.selectionModel.isDirty()) {
+          this.apply.emit(this.selectionModel.diff())
+        }
       }
     }
   }
 
   listFilterEnter(): void {
-    let filtered = this.filterPipe.transform(this.items, this.filterText)
+    const filtered = this.filteredItems
     if (filtered.length == 1) {
       this.selectionModel.toggle(filtered[0].id)
-      if (this.editing) {
-        this.applyClicked()
-      } else {
-        this.dropdown.close()
-      }
+      setTimeout(() => {
+        if (this.editing) {
+          this.applyClicked()
+        } else {
+          this.dropdown.close()
+        }
+      }, 200)
+    } else if (
+      filtered.length == 0 &&
+      this.createRef &&
+      this.filterText?.length > 0
+    ) {
+      this.createClicked()
     }
   }
 
@@ -386,7 +943,100 @@ export class FilterableDropdownComponent {
   }
 
   reset() {
-    this.selectionModel.reset()
+    this.selectionModel.reset(true)
     this.selectionModelChange.emit(this.selectionModel)
+  }
+
+  getUpdatedDocumentCount(id: number) {
+    return this.selectionModel.getDocumentCount(id)
+  }
+
+  listKeyDown(event: KeyboardEvent) {
+    switch (event.key) {
+      case 'ArrowDown':
+        if (event.target instanceof HTMLInputElement) {
+          if (
+            !this.filterText ||
+            event.target.selectionStart === this.filterText.length
+          ) {
+            this.keyboardIndex = -1
+            this.focusNextButtonItem()
+            event.preventDefault()
+          }
+        } else if (event.target instanceof HTMLButtonElement) {
+          this.syncKeyboardIndexFromButton(event.target)
+          this.focusNextButtonItem()
+          event.preventDefault()
+        }
+        break
+      case 'ArrowUp':
+        if (event.target instanceof HTMLButtonElement) {
+          this.syncKeyboardIndexFromButton(event.target)
+          if (this.keyboardIndex === 0) {
+            this.listFilterTextInput.nativeElement.focus()
+          } else {
+            this.focusPreviousButtonItem()
+          }
+          event.preventDefault()
+        }
+        break
+      case 'Tab':
+        // just track the index in case user uses arrows
+        if (event.target instanceof HTMLInputElement) {
+          this.keyboardIndex = 0
+        } else if (event.target instanceof HTMLButtonElement) {
+          if (event.shiftKey) {
+            if (this.keyboardIndex > 0) {
+              this.focusPreviousButtonItem(false)
+            }
+          } else {
+            this.focusNextButtonItem(false)
+          }
+        }
+      default:
+        break
+    }
+  }
+
+  focusNextButtonItem(setFocus: boolean = true) {
+    this.keyboardIndex = Math.min(this.items.length - 1, this.keyboardIndex + 1)
+    if (setFocus) this.setButtonItemFocus()
+  }
+
+  focusPreviousButtonItem(setFocus: boolean = true) {
+    this.keyboardIndex = Math.max(0, this.keyboardIndex - 1)
+    if (setFocus) this.setButtonItemFocus()
+  }
+
+  private syncKeyboardIndexFromButton(button: HTMLButtonElement) {
+    // because of virtual scrolling, re-calculate the index
+    const idx = this.renderedButtons.indexOf(button)
+    if (idx >= 0) {
+      this.keyboardIndex = this.buttonsViewport.getRenderedRange().start + idx
+    }
+  }
+
+  setButtonItemFocus() {
+    const offset =
+      this.keyboardIndex - this.buttonsViewport.getRenderedRange().start
+    this.renderedButtons[offset]?.focus()
+  }
+
+  hideCount(item: ObjectWithPermissions) {
+    // counts are pointless when clicking item would add to the set of docs
+    return (
+      this.selectionModel.logicalOperator === LogicalOperator.Or &&
+      this.manyToOne &&
+      this.selectionModel.get(item.id) !== ToggleableItemState.Selected
+    )
+  }
+
+  extraButtonClicked() {
+    // don't apply changes when clicking the extra button
+    const applyOnClose = this.applyOnClose
+    this.applyOnClose = false
+    this.dropdown.close()
+    this.extraButton.emit(this.selectionModel.diff())
+    this.applyOnClose = applyOnClose
   }
 }

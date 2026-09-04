@@ -1,87 +1,173 @@
-import { Injectable } from '@angular/core'
-import { PaperlessDocument } from 'src/app/data/paperless-document'
-import { PaperlessDocumentMetadata } from 'src/app/data/paperless-document-metadata'
-import { AbstractPaperlessService } from './abstract-paperless-service'
-import { HttpClient, HttpParams } from '@angular/common/http'
+import { Injectable, inject } from '@angular/core'
 import { Observable } from 'rxjs'
-import { Results } from 'src/app/data/results'
+import { map } from 'rxjs/operators'
+import { AuditLogEntry } from 'src/app/data/auditlog-entry'
+import { CustomField } from 'src/app/data/custom-field'
+import {
+  DOCUMENT_SORT_FIELDS,
+  DOCUMENT_SORT_FIELDS_FULLTEXT,
+  Document,
+  DocumentVersionInfo,
+} from 'src/app/data/document'
+import { DocumentMetadata } from 'src/app/data/document-metadata'
+import { DocumentSuggestions } from 'src/app/data/document-suggestions'
 import { FilterRule } from 'src/app/data/filter-rule'
-import { map, tap } from 'rxjs/operators'
-import { CorrespondentService } from './correspondent.service'
-import { DocumentTypeService } from './document-type.service'
-import { TagService } from './tag.service'
-import { PaperlessDocumentSuggestions } from 'src/app/data/paperless-document-suggestions'
+import { Results, SelectionData } from 'src/app/data/results'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
 import { queryParamsFromFilterRules } from '../../utils/query-params'
-import { StoragePathService } from './storage-path.service'
+import {
+  PermissionAction,
+  PermissionType,
+  PermissionsService,
+} from '../permissions.service'
+import { SettingsService } from '../settings.service'
+import { AbstractPaperlessService } from './abstract-paperless-service'
+import { CustomFieldsService } from './custom-fields.service'
 
-export const DOCUMENT_SORT_FIELDS = [
-  { field: 'archive_serial_number', name: $localize`ASN` },
-  { field: 'correspondent__name', name: $localize`Correspondent` },
-  { field: 'title', name: $localize`Title` },
-  { field: 'document_type__name', name: $localize`Document type` },
-  { field: 'created', name: $localize`Created` },
-  { field: 'added', name: $localize`Added` },
-  { field: 'modified', name: $localize`Modified` },
-]
-
-export const DOCUMENT_SORT_FIELDS_FULLTEXT = [
-  ...DOCUMENT_SORT_FIELDS,
-  {
-    field: 'score',
-    name: $localize`:Score is a value returned by the full text search engine and specifies how well a result matches the given query:Search score`,
-  },
-]
-
-export interface SelectionDataItem {
-  id: number
-  document_count: number
+export enum BulkEditSourceMode {
+  LATEST_VERSION = 'latest_version',
+  EXPLICIT_SELECTION = 'explicit_selection',
 }
 
-export interface SelectionData {
-  selected_storage_paths: SelectionDataItem[]
-  selected_correspondents: SelectionDataItem[]
-  selected_tags: SelectionDataItem[]
-  selected_document_types: SelectionDataItem[]
+export type DocumentBulkEditMethod =
+  | 'set_correspondent'
+  | 'set_document_type'
+  | 'set_storage_path'
+  | 'add_tag'
+  | 'remove_tag'
+  | 'modify_tags'
+  | 'modify_custom_fields'
+  | 'set_permissions'
+
+export interface MergeDocumentsRequest {
+  metadata_document_id?: number
+  delete_originals?: boolean
+  archive_fallback?: boolean
+  source_mode?: BulkEditSourceMode
+}
+
+export interface EditPdfOperation {
+  page: number
+  rotate?: number
+  doc?: number
+}
+
+export interface EditPdfDocumentsRequest {
+  operations: EditPdfOperation[]
+  delete_original?: boolean
+  update_document?: boolean
+  include_metadata?: boolean
+  source_mode?: BulkEditSourceMode
+}
+
+export interface RemovePasswordDocumentsRequest {
+  password: string
+  update_document?: boolean
+  delete_original?: boolean
+  include_metadata?: boolean
+  source_mode?: BulkEditSourceMode
+}
+
+export interface DocumentSelectionQuery {
+  documents?: number[]
+  all?: boolean
+  filters?: { [key: string]: any }
 }
 
 @Injectable({
   providedIn: 'root',
 })
-export class DocumentService extends AbstractPaperlessService<PaperlessDocument> {
+export class DocumentService extends AbstractPaperlessService<Document> {
+  private permissionsService = inject(PermissionsService)
+  private settingsService = inject(SettingsService)
+  private customFieldService = inject(CustomFieldsService)
+
   private _searchQuery: string
 
-  constructor(
-    http: HttpClient,
-    private correspondentService: CorrespondentService,
-    private documentTypeService: DocumentTypeService,
-    private tagService: TagService,
-    private storagePathService: StoragePathService
-  ) {
-    super(http, 'documents')
+  private _sortFields
+  get sortFields() {
+    return this._sortFields
   }
 
-  addObservablesToDocument(doc: PaperlessDocument) {
-    if (doc.correspondent) {
-      doc.correspondent$ = this.correspondentService.getCached(
-        doc.correspondent
+  private _sortFieldsFullText
+  get sortFieldsFullText() {
+    return this._sortFieldsFullText
+  }
+
+  private customFields: CustomField[] = []
+
+  constructor() {
+    super()
+    this.resourceName = 'documents'
+    this.reload()
+  }
+
+  public reload() {
+    if (
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.CustomField
       )
+    ) {
+      this.customFieldService.listAll().subscribe((fields) => {
+        this.customFields = fields.results
+        this.setupSortFields()
+      })
     }
-    if (doc.document_type) {
-      doc.document_type$ = this.documentTypeService.getCached(doc.document_type)
+
+    this.setupSortFields()
+  }
+
+  private setupSortFields() {
+    this._sortFields = [...DOCUMENT_SORT_FIELDS]
+    if (
+      this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.CustomField
+      )
+    ) {
+      this.customFields.forEach((field) => {
+        this._sortFields.push({
+          field: `custom_field_${field.id}`,
+          name: field.name,
+        })
+      })
     }
-    if (doc.tags) {
-      doc.tags$ = this.tagService
-        .getCachedMany(doc.tags)
-        .pipe(
-          tap((tags) =>
-            tags.sort((tagA, tagB) => tagA.name.localeCompare(tagB.name))
-          )
-        )
+    let excludes = []
+    if (
+      !this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.Correspondent
+      )
+    ) {
+      excludes.push('correspondent__name')
     }
-    if (doc.storage_path) {
-      doc.storage_path$ = this.storagePathService.getCached(doc.storage_path)
+    if (
+      !this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.DocumentType
+      )
+    ) {
+      excludes.push('document_type__name')
     }
-    return doc
+    if (
+      !this.permissionsService.currentUserCan(
+        PermissionAction.View,
+        PermissionType.User
+      )
+    ) {
+      excludes.push('owner')
+    }
+    if (!this.settingsService.get(SETTINGS_KEYS.NOTES_ENABLED)) {
+      excludes.push('num_notes')
+    }
+    this._sortFields = this._sortFields.filter(
+      (field) => !excludes.includes(field.field)
+    )
+    this._sortFieldsFullText = [
+      ...this._sortFields,
+      ...DOCUMENT_SORT_FIELDS_FULLTEXT,
+    ]
   }
 
   listFiltered(
@@ -91,18 +177,13 @@ export class DocumentService extends AbstractPaperlessService<PaperlessDocument>
     sortReverse?: boolean,
     filterRules?: FilterRule[],
     extraParams = {}
-  ): Observable<Results<PaperlessDocument>> {
+  ): Observable<Results<Document>> {
     return this.list(
       page,
       pageSize,
       sortField,
       sortReverse,
       Object.assign(extraParams, queryParamsFromFilterRules(filterRules))
-    ).pipe(
-      map((results) => {
-        results.results.forEach((doc) => this.addObservablesToDocument(doc))
-        return results
-      })
     )
   }
 
@@ -112,31 +193,123 @@ export class DocumentService extends AbstractPaperlessService<PaperlessDocument>
     }).pipe(map((response) => response.results.map((doc) => doc.id)))
   }
 
-  getPreviewUrl(id: number, original: boolean = false): string {
-    let url = this.getResourceUrl(id, 'preview')
-    if (this._searchQuery) url += `#search="${this._searchQuery}"`
-    if (original) {
-      url += '?original=true'
+  get(
+    id: number,
+    versionID: number = null,
+    fields: string = null
+  ): Observable<Document> {
+    const params: { full_perms: boolean; version?: string; fields?: string } = {
+      full_perms: true,
     }
-    return url
-  }
-
-  getThumbUrl(id: number): string {
-    return this.getResourceUrl(id, 'thumb')
-  }
-
-  getDownloadUrl(id: number, original: boolean = false): string {
-    let url = this.getResourceUrl(id, 'download')
-    if (original) {
-      url += '?original=true'
+    if (versionID) {
+      params.version = versionID.toString()
     }
-    return url
+    if (fields) {
+      params.fields = fields
+    }
+    return this.http.get<Document>(this.getResourceUrl(id), {
+      params,
+    })
   }
 
-  update(o: PaperlessDocument): Observable<PaperlessDocument> {
-    // we want to only set created_date
-    o.created = undefined
-    return super.update(o)
+  getPreviewUrl(
+    id: number,
+    original: boolean = false,
+    versionID: number = null
+  ): string {
+    let url = new URL(this.getResourceUrl(id, 'preview'))
+    if (this._searchQuery) url.hash = `#search="${this.searchQuery}"`
+    if (original) {
+      url.searchParams.append('original', 'true')
+    }
+    if (versionID) {
+      url.searchParams.append('version', versionID.toString())
+    }
+    return url.toString()
+  }
+
+  getThumbUrl(id: number, versionID: number = null): string {
+    let url = new URL(this.getResourceUrl(id, 'thumb'))
+    if (versionID) {
+      url.searchParams.append('version', versionID.toString())
+    }
+    return url.toString()
+  }
+
+  getDownloadUrl(
+    id: number,
+    original: boolean = false,
+    versionID: number = null,
+    followFormatting: boolean = false
+  ): string {
+    let url = new URL(this.getResourceUrl(id, 'download'))
+    if (original) {
+      url.searchParams.append('original', 'true')
+    }
+    if (versionID) {
+      url.searchParams.append('version', versionID.toString())
+    }
+    if (followFormatting) {
+      url.searchParams.append('follow_formatting', 'true')
+    }
+    return url.toString()
+  }
+
+  uploadVersion(documentId: number, file: File, versionLabel?: string) {
+    const formData = new FormData()
+    formData.append('document', file, file.name)
+    if (versionLabel) {
+      formData.append('version_label', versionLabel)
+    }
+    return this.http.post<string>(
+      this.getResourceUrl(documentId, 'update_version'),
+      formData
+    )
+  }
+
+  getVersions(documentId: number): Observable<Document> {
+    return this.http.get<Document>(this.getResourceUrl(documentId), {
+      params: {
+        fields: 'id,versions',
+      },
+    })
+  }
+
+  getRootId(documentId: number) {
+    return this.http.get<{ root_id: number }>(
+      this.getResourceUrl(documentId, 'root')
+    )
+  }
+
+  deleteVersion(rootDocumentId: number, versionId: number) {
+    return this.http.delete<{ result: string; current_version_id: number }>(
+      this.getResourceUrl(rootDocumentId, `versions/${versionId}`)
+    )
+  }
+
+  updateVersionLabel(
+    rootDocumentId: number,
+    versionId: number,
+    versionLabel: string | null
+  ): Observable<DocumentVersionInfo> {
+    return this.http.patch<DocumentVersionInfo>(
+      this.getResourceUrl(rootDocumentId, `versions/${versionId}`),
+      { version_label: versionLabel }
+    )
+  }
+
+  getNextAsn(): Observable<number> {
+    return this.http.get<number>(this.getResourceUrl(null, 'next_asn'))
+  }
+
+  patch(o: Document, versionID: number = null): Observable<Document> {
+    o.remove_inbox_tags = !!this.settingsService.get(
+      SETTINGS_KEYS.DOCUMENT_EDITING_REMOVE_INBOX_TAGS
+    )
+    this.clearCache()
+    return this.http.patch<Document>(this.getResourceUrl(o.id), o, {
+      params: versionID ? { version: versionID.toString() } : {},
+    })
   }
 
   uploadDocument(formData) {
@@ -147,17 +320,90 @@ export class DocumentService extends AbstractPaperlessService<PaperlessDocument>
     )
   }
 
-  getMetadata(id: number): Observable<PaperlessDocumentMetadata> {
-    return this.http.get<PaperlessDocumentMetadata>(
-      this.getResourceUrl(id, 'metadata')
-    )
+  getMetadata(
+    id: number,
+    versionID: number = null
+  ): Observable<DocumentMetadata> {
+    let url = new URL(this.getResourceUrl(id, 'metadata'))
+    if (versionID) {
+      url.searchParams.append('version', versionID.toString())
+    }
+    return this.http.get<DocumentMetadata>(url.toString())
   }
 
-  bulkEdit(ids: number[], method: string, args: any) {
+  bulkEdit(
+    selection: DocumentSelectionQuery,
+    method: DocumentBulkEditMethod,
+    args: any
+  ) {
     return this.http.post(this.getResourceUrl(null, 'bulk_edit'), {
-      documents: ids,
+      ...selection,
       method: method,
       parameters: args,
+    })
+  }
+
+  deleteDocuments(selection: DocumentSelectionQuery) {
+    return this.http.post(this.getResourceUrl(null, 'delete'), {
+      ...selection,
+    })
+  }
+
+  reprocessDocuments(
+    selection: DocumentSelectionQuery,
+    remoteOcr: boolean = false
+  ) {
+    return this.http.post(this.getResourceUrl(null, 'reprocess'), {
+      ...selection,
+      remote_ocr: remoteOcr,
+    })
+  }
+
+  rotateDocuments(
+    selection: DocumentSelectionQuery,
+    degrees: number,
+    sourceMode: BulkEditSourceMode = BulkEditSourceMode.LATEST_VERSION
+  ) {
+    return this.http.post(this.getResourceUrl(null, 'rotate'), {
+      ...selection,
+      degrees,
+      source_mode: sourceMode,
+    })
+  }
+
+  mergeDocuments(ids: number[], request: MergeDocumentsRequest = {}) {
+    return this.http.post(this.getResourceUrl(null, 'merge'), {
+      documents: ids,
+      ...request,
+    })
+  }
+
+  mergeDocumentsAsVersions(
+    ids: number[],
+    rootDocumentId: number,
+    versionLabel?: string
+  ) {
+    return this.http.post(this.getResourceUrl(null, 'merge_as_versions'), {
+      documents: ids,
+      root_document_id: rootDocumentId,
+      ...(versionLabel ? { version_label: versionLabel } : {}),
+    })
+  }
+
+  editPdfDocuments(ids: number[], request: EditPdfDocumentsRequest) {
+    return this.http.post(this.getResourceUrl(null, 'edit_pdf'), {
+      documents: ids,
+      ...request,
+    })
+  }
+
+  removePasswordDocuments(
+    ids: number[],
+    request: RemovePasswordDocumentsRequest
+  ) {
+    return this.http.post(this.getResourceUrl(null, 'remove_password'), {
+      documents: ids,
+      ...request,
     })
   }
 
@@ -168,21 +414,31 @@ export class DocumentService extends AbstractPaperlessService<PaperlessDocument>
     )
   }
 
-  getSuggestions(id: number): Observable<PaperlessDocumentSuggestions> {
-    return this.http.get<PaperlessDocumentSuggestions>(
+  getSuggestions(id: number): Observable<DocumentSuggestions> {
+    return this.http.get<DocumentSuggestions>(
       this.getResourceUrl(id, 'suggestions')
     )
   }
 
+  getAiSuggestions(id: number): Observable<DocumentSuggestions> {
+    return this.http.get<DocumentSuggestions>(
+      this.getResourceUrl(id, 'ai_suggestions')
+    )
+  }
+
+  getHistory(id: number): Observable<AuditLogEntry[]> {
+    return this.http.get<AuditLogEntry[]>(this.getResourceUrl(id, 'history'))
+  }
+
   bulkDownload(
-    ids: number[],
+    selection: DocumentSelectionQuery,
     content = 'both',
     useFilenameFormatting: boolean = false
   ) {
     return this.http.post(
       this.getResourceUrl(null, 'bulk_download'),
       {
-        documents: ids,
+        ...selection,
         content: content,
         follow_formatting: useFilenameFormatting,
       },
@@ -191,6 +447,26 @@ export class DocumentService extends AbstractPaperlessService<PaperlessDocument>
   }
 
   public set searchQuery(query: string) {
-    this._searchQuery = query
+    this._searchQuery = query.trim()
+  }
+
+  public get searchQuery(): string {
+    return this._searchQuery
+  }
+
+  emailDocuments(
+    documentIds: number[],
+    addresses: string,
+    subject: string,
+    message: string,
+    useArchiveVersion: boolean
+  ): Observable<any> {
+    return this.http.post(this.getResourceUrl(null, 'email'), {
+      documents: documentIds,
+      addresses: addresses,
+      subject: subject,
+      message: message,
+      use_archive_version: useArchiveVersion,
+    })
   }
 }

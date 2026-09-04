@@ -1,9 +1,21 @@
-import { Directive, ElementRef, Input, OnInit, ViewChild } from '@angular/core'
+import {
+  ChangeDetectorRef,
+  Directive,
+  ElementRef,
+  EventEmitter,
+  Input,
+  OnInit,
+  Output,
+  ViewChild,
+  inject,
+} from '@angular/core'
 import { ControlValueAccessor } from '@angular/forms'
 import { v4 as uuidv4 } from 'uuid'
 
 @Directive()
 export class AbstractInputComponent<T> implements OnInit, ControlValueAccessor {
+  protected readonly changeDetector = inject(ChangeDetectorRef)
+
   @ViewChild('inputField')
   inputField: ElementRef
 
@@ -15,6 +27,7 @@ export class AbstractInputComponent<T> implements OnInit, ControlValueAccessor {
 
   writeValue(newValue: any): void {
     this.value = newValue
+    this.changeDetector.markForCheck()
   }
   registerOnChange(fn: any): void {
     this.onChange = fn
@@ -24,6 +37,7 @@ export class AbstractInputComponent<T> implements OnInit, ControlValueAccessor {
   }
   setDisabledState?(isDisabled: boolean): void {
     this.disabled = isDisabled
+    this.changeDetector.markForCheck()
   }
 
   focus() {
@@ -41,6 +55,18 @@ export class AbstractInputComponent<T> implements OnInit, ControlValueAccessor {
   @Input()
   error: string
 
+  @Input()
+  hint: string
+
+  @Input()
+  horizontal: boolean = false
+
+  @Input()
+  removable: boolean = false
+
+  @Output()
+  removed: EventEmitter<AbstractInputComponent<any>> = new EventEmitter()
+
   value: T
 
   ngOnInit(): void {
@@ -48,7 +74,4 @@ export class AbstractInputComponent<T> implements OnInit, ControlValueAccessor {
   }
 
   inputId: string
-
-  @Input()
-  hint: string
 }

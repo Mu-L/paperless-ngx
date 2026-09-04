@@ -1,9 +1,25 @@
-import { Component, forwardRef, Input, OnInit } from '@angular/core'
-import { NG_VALUE_ACCESSOR } from '@angular/forms'
+import {
+  Component,
+  EventEmitter,
+  forwardRef,
+  inject,
+  Input,
+  OnInit,
+  Output,
+} from '@angular/core'
+import {
+  FormsModule,
+  NG_VALUE_ACCESSOR,
+  ReactiveFormsModule,
+} from '@angular/forms'
+import { RouterModule } from '@angular/router'
 import {
   NgbDateAdapter,
   NgbDateParserFormatter,
+  NgbDatepickerModule,
+  NgbDateStruct,
 } from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
 import { SettingsService } from 'src/app/services/settings.service'
 import { AbstractInputComponent } from '../abstract-input'
 
@@ -15,24 +31,35 @@ import { AbstractInputComponent } from '../abstract-input'
       multi: true,
     },
   ],
-  selector: 'app-input-date',
+  selector: 'pngx-input-date',
   templateUrl: './date.component.html',
   styleUrls: ['./date.component.scss'],
+  imports: [
+    NgbDatepickerModule,
+    FormsModule,
+    ReactiveFormsModule,
+    RouterModule,
+    NgxBootstrapIconsModule,
+  ],
 })
 export class DateComponent
   extends AbstractInputComponent<string>
   implements OnInit
 {
-  constructor(
-    private settings: SettingsService,
-    private ngbDateParserFormatter: NgbDateParserFormatter,
-    private isoDateAdapter: NgbDateAdapter<string>
-  ) {
-    super()
-  }
+  private settings = inject(SettingsService)
+  private ngbDateParserFormatter = inject(NgbDateParserFormatter)
+  private isoDateAdapter = inject<NgbDateAdapter<string>>(NgbDateAdapter)
 
   @Input()
   suggestions: string[]
+
+  @Input()
+  showFilter: boolean = false
+
+  @Output()
+  filterDocuments = new EventEmitter<NgbDateStruct[]>()
+
+  public readonly today: string = new Date().toLocaleDateString('en-CA')
 
   getSuggestions() {
     return this.suggestions == null
@@ -76,8 +103,20 @@ export class DateComponent
   }
 
   onKeyPress(event: KeyboardEvent) {
-    if ('Enter' !== event.key && !/[0-9,\.\/-]+/.test(event.key)) {
+    if (
+      'Enter' !== event.key &&
+      !(event.altKey || event.metaKey || event.ctrlKey) &&
+      !/[0-9,\.\/-]+/.test(event.key)
+    ) {
       event.preventDefault()
     }
+  }
+
+  onFilterDocuments() {
+    this.filterDocuments.emit([this.ngbDateParserFormatter.parse(this.value)])
+  }
+
+  get filterButtonTitle() {
+    return $localize`Filter documents with this ${this.title}`
   }
 }

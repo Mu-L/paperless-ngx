@@ -1,19 +1,43 @@
-import { Injectable } from '@angular/core'
-import { ParamMap, Router } from '@angular/router'
-import { Observable } from 'rxjs'
+import { Injectable, inject, signal } from '@angular/core'
+import { ParamMap, Router, UrlTree } from '@angular/router'
+import { Observable, Subject, takeUntil } from 'rxjs'
 import {
-  filterRulesDiffer,
-  cloneFilterRules,
-  FilterRule,
-  isFullTextFilterRule,
-} from '../data/filter-rule'
-import { PaperlessDocument } from '../data/paperless-document'
-import { PaperlessSavedView } from '../data/paperless-saved-view'
-import { SETTINGS_KEYS } from '../data/paperless-uisettings'
+  DEFAULT_DISPLAY_FIELDS,
+  DisplayField,
+  DisplayMode,
+  Document,
+} from '../data/document'
+import { FilterRule } from '../data/filter-rule'
+import { DocumentResults, SelectionData } from '../data/results'
+import { SavedView } from '../data/saved-view'
 import { DOCUMENT_LIST_SERVICE } from '../data/storage-keys'
+import { SETTINGS_KEYS } from '../data/ui-settings'
+import {
+  cloneFilterRules,
+  filterRulesDiffer,
+  isFullTextFilterRule,
+} from '../utils/filter-rules'
 import { paramsFromViewState, paramsToViewState } from '../utils/query-params'
-import { DocumentService, DOCUMENT_SORT_FIELDS } from './rest/document.service'
+import { DocumentService } from './rest/document.service'
 import { SettingsService } from './settings.service'
+
+const LIST_DEFAULT_DISPLAY_FIELDS: DisplayField[] = DEFAULT_DISPLAY_FIELDS.map(
+  (f) => f.id
+).filter((f) => f !== DisplayField.ADDED)
+
+const RESTORABLE_LIST_VIEW_STATE_KEYS: (keyof ListViewState)[] = [
+  'title',
+  'documents',
+  'currentPage',
+  'collectionSize',
+  'sortField',
+  'sortReverse',
+  'filterRules',
+  'selected',
+  'pageSize',
+  'displayMode',
+  'displayFields',
+]
 
 /**
  * Captures the current state of the list view.
@@ -27,7 +51,7 @@ export interface ListViewState {
   /**
    * Current paginated list of documents displayed.
    */
-  documents?: PaperlessDocument[]
+  documents?: Document[]
 
   currentPage: number
 
@@ -55,6 +79,26 @@ export interface ListViewState {
    * Contains the IDs of all selected documents.
    */
   selected?: Set<number>
+
+  /**
+   * True if the full filtered result set is selected.
+   */
+  allSelected?: boolean
+
+  /**
+   * The page size of the list view.
+   */
+  pageSize?: number
+
+  /**
+   * Display mode of the list view.
+   */
+  displayMode?: DisplayMode
+
+  /**
+   * The fields to display in the document list.
+   */
+  displayFields?: DisplayField[]
 }
 
 /**
@@ -67,51 +111,97 @@ export interface ListViewState {
   providedIn: 'root',
 })
 export class DocumentListViewService {
+  private documentService = inject(DocumentService)
+  private settings = inject(SettingsService)
+  private router = inject(Router)
+
   isReloading: boolean = false
   initialized: boolean = false
   error: string = null
+  private readonly stateVersion = signal(0)
 
   rangeSelectionAnchorIndex: number
   lastRangeSelectionToIndex: number
 
-  currentPageSize: number = this.settings.get(SETTINGS_KEYS.DOCUMENT_LIST_SIZE)
+  selectionData?: SelectionData
+
+  private unsubscribeNotifier: Subject<any> = new Subject()
 
   private listViewStates: Map<number, ListViewState> = new Map()
 
   private _activeSavedViewId: number = null
 
+  private displayFieldsInitialized: boolean = false
+
+  private markChanged(): void {
+    this.stateVersion.update((version) => version + 1)
+  }
+
+  private trackState(): void {
+    this.stateVersion()
+  }
+
+  private restoreListViewState(savedState: unknown): ListViewState {
+    const newState = this.defaultListViewState()
+
+    if (
+      !savedState ||
+      typeof savedState !== 'object' ||
+      Array.isArray(savedState)
+    ) {
+      return newState
+    }
+
+    const parsedState = savedState as Partial<
+      Record<keyof ListViewState, unknown>
+    >
+    const mutableState = newState as Record<keyof ListViewState, unknown>
+
+    for (const key of RESTORABLE_LIST_VIEW_STATE_KEYS) {
+      const value = parsedState[key]
+      if (value != null) {
+        mutableState[key] = value
+      }
+    }
+
+    return newState
+  }
+
   get activeSavedViewId() {
+    this.trackState()
     return this._activeSavedViewId
   }
 
   get activeSavedViewTitle() {
+    this.trackState()
     return this.activeListViewState.title
   }
 
-  constructor(
-    private documentService: DocumentService,
-    private settings: SettingsService,
-    private router: Router
-  ) {
+  constructor() {
     let documentListViewConfigJson = localStorage.getItem(
       DOCUMENT_LIST_SERVICE.CURRENT_VIEW_CONFIG
     )
     if (documentListViewConfigJson) {
       try {
         let savedState: ListViewState = JSON.parse(documentListViewConfigJson)
-        // Remove null elements from the restored state
-        Object.keys(savedState).forEach((k) => {
-          if (savedState[k] == null) {
-            delete savedState[k]
-          }
-        })
-        //only use restored state attributes instead of defaults if they are not null
-        let newState = Object.assign(this.defaultListViewState(), savedState)
+        let newState = this.restoreListViewState(savedState)
         this.listViewStates.set(null, newState)
       } catch (e) {
         localStorage.removeItem(DOCUMENT_LIST_SERVICE.CURRENT_VIEW_CONFIG)
       }
     }
+
+    this.settings.displayFieldsInit.subscribe(() => {
+      this.displayFieldsInitialized = true
+      if (this.activeListViewState.displayFields) {
+        this.activeListViewState.displayFields =
+          this.activeListViewState.displayFields.filter((field) =>
+            this.settings.allDisplayFields().some((f) => f.id === field)
+          )
+        this.saveDocumentListView()
+      }
+      this.markChanged()
+    })
   }
 
   private defaultListViewState(): ListViewState {
@@ -124,6 +214,20 @@ export class DocumentListViewService {
       sortReverse: true,
       filterRules: [],
       selected: new Set<number>(),
+      allSelected: false,
+    }
+  }
+
+  private syncSelectedToCurrentPage() {
+    if (!this.allSelected) {
+      return
+    }
+
+    this.selected.clear()
+    this.documents?.forEach((doc) => this.selected.add(doc.id))
+
+    if (!this.collectionSize) {
+      this.selectNone()
     }
   }
 
@@ -137,7 +241,11 @@ export class DocumentListViewService {
     return this.listViewStates.get(this._activeSavedViewId)
   }
 
-  activateSavedView(view: PaperlessSavedView) {
+  public cancelPending(): void {
+    this.unsubscribeNotifier.next(true)
+  }
+
+  activateSavedView(view: SavedView) {
     this.rangeSelectionAnchorIndex = this.lastRangeSelectionToIndex = null
     if (view) {
       this._activeSavedViewId = view.id
@@ -145,18 +253,16 @@ export class DocumentListViewService {
     } else {
       this._activeSavedViewId = null
     }
+    this.markChanged()
   }
 
-  activateSavedViewWithQueryParams(
-    view: PaperlessSavedView,
-    queryParams: ParamMap
-  ) {
+  activateSavedViewWithQueryParams(view: SavedView, queryParams: ParamMap) {
     const viewState = paramsToViewState(queryParams)
     this.activateSavedView(view)
     this.currentPage = viewState.currentPage
   }
 
-  loadSavedView(view: PaperlessSavedView, closeCurrentView: boolean = false) {
+  loadSavedView(view: SavedView, closeCurrentView: boolean = false) {
     if (closeCurrentView) {
       this._activeSavedViewId = null
     }
@@ -167,8 +273,12 @@ export class DocumentListViewService {
     if (this._activeSavedViewId) {
       this.activeListViewState.title = view.name
     }
+    this.activeListViewState.displayMode = view.display_mode
+    this.activeListViewState.pageSize = view.page_size
+    this.activeListViewState.displayFields = view.display_fields
 
     this.reduceSelectionToFilter()
+    this.markChanged()
 
     if (!this.router.routerState.snapshot.url.includes('/view/')) {
       this.router.navigate(['view', view.id])
@@ -199,29 +309,38 @@ export class DocumentListViewService {
       this.activeListViewState.sortField = newState.sortField
       this.activeListViewState.sortReverse = newState.sortReverse
       this.activeListViewState.currentPage = newState.currentPage
-      this.reload(null, paramsEmpty) // update the params if there arent any
+      this.markChanged()
+      this.reload(null, paramsEmpty) // update the params if there aren't any
     }
   }
 
   reload(onFinish?, updateQueryParams: boolean = true) {
+    this.cancelPending()
     this.isReloading = true
     this.error = null
+    this.markChanged()
     let activeListViewState = this.activeListViewState
     this.documentService
       .listFiltered(
         activeListViewState.currentPage,
-        this.currentPageSize,
+        activeListViewState.pageSize ?? this.pageSize,
         activeListViewState.sortField,
         activeListViewState.sortReverse,
         activeListViewState.filterRules,
-        { truncate_content: true }
+        { truncate_content: true, include_selection_data: true }
       )
+      .pipe(takeUntil(this.unsubscribeNotifier))
       .subscribe({
         next: (result) => {
+          const resultWithSelectionData = result as DocumentResults
           this.initialized = true
           this.isReloading = false
           activeListViewState.collectionSize = result.count
           activeListViewState.documents = result.results
+          this.selectionData = resultWithSelectionData.selection_data ?? null
+          this.syncSelectedToCurrentPage()
+          this.markChanged()
+
           if (updateQueryParams && !this._activeSavedViewId) {
             let base = ['/documents']
             this.router.navigate(base, {
@@ -239,25 +358,39 @@ export class DocumentListViewService {
             onFinish()
           }
           this.rangeSelectionAnchorIndex = this.lastRangeSelectionToIndex = null
+          this.markChanged()
         },
         error: (error) => {
           this.isReloading = false
           if (activeListViewState.currentPage != 1 && error.status == 404) {
             // this happens when applying a filter: the current page might not be available anymore due to the reduced result set.
             activeListViewState.currentPage = 1
+            this.markChanged()
             this.reload()
+          } else if (
+            activeListViewState.sortField.indexOf('custom_field') === 0 &&
+            !this.settings
+              .allDisplayFields()
+              .some((f) => f.id === activeListViewState.sortField)
+          ) {
+            // e.g. field was deleted
+            this.sortField = 'created'
           } else {
+            this.selectionData = null
             let errorMessage
             if (
-              typeof error.error !== 'string' &&
+              typeof error.error === 'object' &&
               Object.keys(error.error).length > 0
             ) {
               // e.g. { archive_serial_number: Array<string> }
               errorMessage = Object.keys(error.error)
                 .map((fieldName) => {
+                  const fieldNameBase = fieldName.split('__')[0]
                   const fieldError: Array<string> = error.error[fieldName]
                   return `${
-                    DOCUMENT_SORT_FIELDS.find((f) => f.field == fieldName)?.name
+                    this.sortFields.find(
+                      (f) => f.field?.split('__')[0] == fieldNameBase
+                    )?.name ?? fieldNameBase
                   }: ${fieldError[0]}`
                 })
                 .join(', ')
@@ -265,12 +398,13 @@ export class DocumentListViewService {
               errorMessage = error.error
             }
             this.error = errorMessage
+            this.markChanged()
           }
         },
       })
   }
 
-  set filterRules(filterRules: FilterRule[]) {
+  setFilterRules(filterRules: FilterRule[], resetPage: boolean = false) {
     if (
       !isFullTextFilterRule(filterRules) &&
       this.activeListViewState.sortField == 'score'
@@ -278,62 +412,146 @@ export class DocumentListViewService {
       this.activeListViewState.sortField = 'created'
     }
     this.activeListViewState.filterRules = filterRules
+    if (resetPage) {
+      this.activeListViewState.currentPage = 1
+    }
+    this.markChanged()
     this.reload()
     this.reduceSelectionToFilter()
     this.saveDocumentListView()
   }
 
   get filterRules(): FilterRule[] {
+    this.trackState()
     return this.activeListViewState.filterRules
+  }
+
+  get sortFields(): any[] {
+    return this.documentService.sortFields
+  }
+
+  get sortFieldsFullText(): any[] {
+    return this.documentService.sortFieldsFullText
   }
 
   set sortField(field: string) {
     this.activeListViewState.sortField = field
+    this.markChanged()
     this.reload()
     this.saveDocumentListView()
   }
 
   get sortField(): string {
+    this.trackState()
     return this.activeListViewState.sortField
   }
 
   set sortReverse(reverse: boolean) {
     this.activeListViewState.sortReverse = reverse
+    this.markChanged()
     this.reload()
     this.saveDocumentListView()
   }
 
   get sortReverse(): boolean {
+    this.trackState()
     return this.activeListViewState.sortReverse
   }
 
   get collectionSize(): number {
+    this.trackState()
     return this.activeListViewState.collectionSize
   }
 
   get currentPage(): number {
+    this.trackState()
     return this.activeListViewState.currentPage
   }
 
   set currentPage(page: number) {
     if (this.activeListViewState.currentPage == page) return
     this.activeListViewState.currentPage = page
+    this.markChanged()
     this.reload()
     this.saveDocumentListView()
   }
 
-  get documents(): PaperlessDocument[] {
+  get documents(): Document[] {
+    this.trackState()
     return this.activeListViewState.documents
   }
 
   get selected(): Set<number> {
+    this.trackState()
     return this.activeListViewState.selected
+  }
+
+  get allSelected(): boolean {
+    this.trackState()
+    return this.activeListViewState.allSelected ?? false
+  }
+
+  get selectedCount(): number {
+    return this.allSelected
+      ? (this.collectionSize ?? this.selected.size)
+      : this.selected.size
+  }
+
+  get hasSelection(): boolean {
+    return this.allSelected || this.selected.size > 0
   }
 
   setSort(field: string, reverse: boolean) {
     this.activeListViewState.sortField = field
     this.activeListViewState.sortReverse = reverse
+    this.markChanged()
     this.reload()
+    this.saveDocumentListView()
+  }
+
+  set displayMode(mode: DisplayMode) {
+    this.activeListViewState.displayMode = mode
+    this.markChanged()
+    this.saveDocumentListView()
+  }
+
+  get displayMode(): DisplayMode {
+    this.trackState()
+    const mode = this.activeListViewState.displayMode ?? DisplayMode.SMALL_CARDS
+    if (mode === ('details' as any)) {
+      // legacy
+      return DisplayMode.TABLE
+    }
+    return mode
+  }
+
+  set pageSize(size: number) {
+    this.activeListViewState.pageSize = size
+    this.markChanged()
+    this.reload()
+    this.saveDocumentListView()
+  }
+
+  get pageSize(): number {
+    this.trackState()
+    return (
+      this.activeListViewState.pageSize ??
+      this.settings.get(SETTINGS_KEYS.DOCUMENT_LIST_SIZE)
+    )
+  }
+
+  get displayFields(): DisplayField[] {
+    this.trackState()
+    return this.activeListViewState.displayFields ?? LIST_DEFAULT_DISPLAY_FIELDS
+  }
+
+  set displayFields(fields: DisplayField[]) {
+    this.activeListViewState.displayFields = this.displayFieldsInitialized
+      ? fields?.filter((field) =>
+          this.settings.allDisplayFields().some((f) => f.id === field)
+        )
+      : fields
+    this.markChanged()
     this.saveDocumentListView()
   }
 
@@ -345,6 +563,8 @@ export class DocumentListViewService {
         filterRules: this.activeListViewState.filterRules,
         sortField: this.activeListViewState.sortField,
         sortReverse: this.activeListViewState.sortReverse,
+        displayMode: this.activeListViewState.displayMode,
+        displayFields: this.activeListViewState.displayFields,
       }
       localStorage.setItem(
         DOCUMENT_LIST_SERVICE.CURRENT_VIEW_CONFIG,
@@ -354,11 +574,26 @@ export class DocumentListViewService {
   }
 
   quickFilter(filterRules: FilterRule[]) {
-    this.filterRules = filterRules
+    this._activeSavedViewId = null
+    this.markChanged()
+    this.setFilterRules(filterRules)
+    this.router.navigate(['documents'])
+  }
+
+  getQuickFilterUrl(filterRules: FilterRule[]): UrlTree {
+    const defaultState = {
+      ...this.defaultListViewState(),
+      ...this.listViewStates.get(null),
+      filterRules,
+    }
+    const params = paramsFromViewState(defaultState)
+    return this.router.createUrlTree(['/documents'], {
+      queryParams: params,
+    })
   }
 
   getLastPage(): number {
-    return Math.ceil(this.collectionSize / this.currentPageSize)
+    return Math.ceil(this.collectionSize / this.pageSize)
   }
 
   hasNext(doc: number) {
@@ -425,19 +660,18 @@ export class DocumentListViewService {
     })
   }
 
-  updatePageSize() {
-    let newPageSize = this.settings.get(SETTINGS_KEYS.DOCUMENT_LIST_SIZE)
-    if (newPageSize != this.currentPageSize) {
-      this.currentPageSize = newPageSize
-    }
-  }
-
   selectNone() {
+    this.activeListViewState.allSelected = false
     this.selected.clear()
     this.rangeSelectionAnchorIndex = this.lastRangeSelectionToIndex = null
+    this.markChanged()
   }
 
   reduceSelectionToFilter() {
+    if (this.allSelected) {
+      return
+    }
+
     if (this.selected.size > 0) {
       this.documentService
         .listAllFilteredIds(this.filterRules)
@@ -447,35 +681,46 @@ export class DocumentListViewService {
               this.selected.delete(id)
             }
           }
+          this.markChanged()
         })
     }
   }
 
   selectAll() {
-    this.documentService
-      .listAllFilteredIds(this.filterRules)
-      .subscribe((ids) => ids.forEach((id) => this.selected.add(id)))
+    this.activeListViewState.allSelected = true
+    this.syncSelectedToCurrentPage()
+    this.markChanged()
   }
 
   selectPage() {
+    this.activeListViewState.allSelected = false
     this.selected.clear()
     this.documents.forEach((doc) => {
       this.selected.add(doc.id)
     })
+    this.markChanged()
   }
 
-  isSelected(d: PaperlessDocument) {
-    return this.selected.has(d.id)
+  isSelected(d: Document) {
+    return this.allSelected || this.selected.has(d.id)
   }
 
-  toggleSelected(d: PaperlessDocument): void {
+  toggleSelected(d: Document): void {
+    if (this.allSelected) {
+      this.activeListViewState.allSelected = false
+    }
     if (this.selected.has(d.id)) this.selected.delete(d.id)
     else this.selected.add(d.id)
     this.rangeSelectionAnchorIndex = this.documentIndexInCurrentView(d.id)
     this.lastRangeSelectionToIndex = null
+    this.markChanged()
   }
 
-  selectRangeTo(d: PaperlessDocument) {
+  selectRangeTo(d: Document) {
+    if (this.allSelected) {
+      this.activeListViewState.allSelected = false
+    }
+
     if (this.rangeSelectionAnchorIndex !== null) {
       const documentToIndex = this.documentIndexInCurrentView(d.id)
       const fromIndex = Math.min(
@@ -506,6 +751,7 @@ export class DocumentListViewService {
         this.selected.add(d.id)
       })
       this.lastRangeSelectionToIndex = documentToIndex
+      this.markChanged()
     } else {
       // e.g. shift key but was first click
       this.toggleSelected(d)
