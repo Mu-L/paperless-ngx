@@ -1,14 +1,24 @@
-import { Component, EventEmitter, Input, Output } from '@angular/core'
+import { DecimalPipe } from '@angular/common'
+import {
+  Component,
+  EventEmitter,
+  Input,
+  Output,
+  inject,
+  signal,
+} from '@angular/core'
 import { NgbActiveModal } from '@ng-bootstrap/ng-bootstrap'
-import { interval, Subject, switchMap, take } from 'rxjs'
+import { Subject } from 'rxjs'
+import { LoadingComponentWithPermissions } from '../../loading-component/loading.component'
 
 @Component({
-  selector: 'app-confirm-dialog',
+  selector: 'pngx-confirm-dialog',
   templateUrl: './confirm-dialog.component.html',
   styleUrls: ['./confirm-dialog.component.scss'],
+  imports: [DecimalPipe],
 })
-export class ConfirmDialogComponent {
-  constructor(public activeModal: NgbActiveModal) {}
+export class ConfirmDialogComponent extends LoadingComponentWithPermissions {
+  activeModal = inject(NgbActiveModal)
 
   @Output()
   public confirmClicked = new EventEmitter()
@@ -20,10 +30,10 @@ export class ConfirmDialogComponent {
   title = $localize`Confirmation`
 
   @Input()
-  messageBold
+  messageBold: string
 
   @Input()
-  message
+  message: string
 
   @Input()
   btnClass = 'btn-primary'
@@ -35,10 +45,15 @@ export class ConfirmDialogComponent {
   alternativeBtnClass = 'btn-secondary'
 
   @Input()
-  alternativeBtnCaption
+  alternativeBtnCaption: string
 
   @Input()
-  buttonsEnabled = true
+  cancelBtnClass = 'btn-outline-secondary'
+
+  @Input()
+  cancelBtnCaption = $localize`Cancel`
+
+  readonly buttonsEnabled = signal(true)
 
   confirmButtonEnabled = true
   alternativeButtonEnabled = true
@@ -47,26 +62,6 @@ export class ConfirmDialogComponent {
 
   confirmSubject: Subject<boolean>
   alternativeSubject: Subject<boolean>
-
-  delayConfirm(seconds: number) {
-    const refreshInterval = 0.15 // s
-
-    this.secondsTotal = seconds
-    this.seconds = seconds
-
-    interval(refreshInterval * 1000)
-      .pipe(
-        take(this.secondsTotal / refreshInterval + 2) // need 2 more for animation to complete after 0
-      )
-      .subscribe((count) => {
-        this.seconds = Math.max(
-          0,
-          this.secondsTotal - refreshInterval * (count + 1)
-        )
-        this.confirmButtonEnabled =
-          this.secondsTotal - refreshInterval * count < 0
-      })
-  }
 
   cancel() {
     this.confirmSubject?.next(false)

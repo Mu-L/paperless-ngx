@@ -1,62 +1,52 @@
 import logging
-import multiprocessing
 import shutil
 
-import tqdm
-from django import db
-from django.core.management.base import BaseCommand
+from documents.management.commands.base import PaperlessCommand
 from documents.models import Document
+from paperless.parsers.registry import get_parser_registry
 
-from ...parsers import get_parser_class_for_mime_type
-
-
-def _process_document(doc_in):
-    document: Document = Document.objects.get(id=doc_in)
-    parser_class = get_parser_class_for_mime_type(document.mime_type)
-
-    if parser_class:
-        parser = parser_class(logging_group=None)
-    else:
-        print(f"{document} No parser for mime type {document.mime_type}")
-        return
-
-    try:
-
-        thumb = parser.get_thumbnail(
-            document.source_path,
-            document.mime_type,
-            document.get_public_filename(),
-        )
-
-        shutil.move(thumb, document.thumbnail_path)
-    finally:
-        parser.cleanup()
+logger = logging.getLogger("paperless.management.thumbnails")
 
 
-class Command(BaseCommand):
-
-    help = """
-        This will regenerate the thumbnails for all documents.
-    """.replace(
-        "    ",
-        "",
+def _process_document(doc_id: int) -> None:
+    document: Document = Document.objects.get(id=doc_id)
+    parser_class = get_parser_registry().get_parser_for_file(
+        document.mime_type,
+        document.original_filename or "",
+        document.source_path,
     )
 
-    def add_arguments(self, parser):
+    if parser_class is None:
+        logger.warning(
+            "%s: No parser for mime type %s",
+            document,
+            document.mime_type,
+        )
+        return
+
+    with parser_class() as parser:
+        thumb = parser.get_thumbnail(document.source_path, document.mime_type)
+        shutil.move(thumb, document.thumbnail_path)
+
+
+class Command(PaperlessCommand):
+    help = "This will regenerate the thumbnails for all documents."
+
+    supports_progress_bar = True
+    supports_multiprocessing = True
+
+    def add_arguments(self, parser) -> None:
+        super().add_arguments(parser)
         parser.add_argument(
             "-d",
             "--document",
             default=None,
             type=int,
             required=False,
-            help="Specify the ID of a document, and this command will only "
-            "run on this specific document.",
-        )
-        parser.add_argument(
-            "--no-progress-bar",
-            default=False,
-            action="store_true",
-            help="If set, the progress bar will not be shown",
+            help=(
+                "Specify the ID of a document, and this command will only "
+                "run on this specific document."
+            ),
         )
 
     def handle(self, *args, **options):
@@ -67,18 +57,14 @@ class Command(BaseCommand):
         else:
             documents = Document.objects.all()
 
-        ids = [doc.id for doc in documents]
+        ids = list(documents.values_list("id", flat=True))
 
-        # Note to future self: this prevents django from reusing database
-        # connections between processes, which is bad and does not work
-        # with postgres.
-        db.connections.close_all()
-
-        with multiprocessing.Pool() as pool:
-            list(
-                tqdm.tqdm(
-                    pool.imap_unordered(_process_document, ids),
-                    total=len(ids),
-                    disable=options["no_progress_bar"],
-                ),
-            )
+        for result in self.process_parallel(
+            _process_document,
+            ids,
+            description="Regenerating thumbnails...",
+        ):
+            if result.error:  # pragma: no cover
+                self.console.print(
+                    f"[red]Failed document {result.item}: {result.error}[/red]",
+                )

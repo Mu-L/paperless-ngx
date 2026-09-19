@@ -1,20 +1,49 @@
-import { Component, Input } from '@angular/core'
-import { PaperlessTag } from 'src/app/data/paperless-tag'
+import { Component, effect, inject, input, model } from '@angular/core'
+import { Tag } from 'src/app/data/tag'
+import {
+  PermissionAction,
+  PermissionsService,
+  PermissionType,
+} from 'src/app/services/permissions.service'
+import { TagService } from 'src/app/services/rest/tag.service'
 
 @Component({
-  selector: 'app-tag',
+  selector: 'pngx-tag',
   templateUrl: './tag.component.html',
   styleUrls: ['./tag.component.scss'],
 })
 export class TagComponent {
-  constructor() {}
+  private permissionsService = inject(PermissionsService)
+  private tagService = inject(TagService)
 
-  @Input()
-  tag: PaperlessTag
+  readonly tag = model<Tag>(null)
+  readonly tagID = input<number>(undefined)
+  readonly linkTitle = input('')
+  readonly clickable = input(false, {
+    transform: (value: boolean | string) =>
+      value === '' || value === true || value === 'true',
+  })
+  readonly showParents = input(false)
 
-  @Input()
-  linkTitle: string = ''
+  constructor() {
+    effect(() => {
+      const tagID = this.tagID()
+      if (tagID) {
+        if (
+          this.permissionsService.currentUserCan(
+            PermissionAction.View,
+            PermissionType.Tag
+          )
+        ) {
+          this.tagService.getCached(tagID).subscribe((tag) => {
+            this.tag.set(tag)
+          })
+        }
+      }
+    })
+  }
 
-  @Input()
-  clickable: boolean = false
+  public get loading(): boolean {
+    return this.tagService.loading
+  }
 }

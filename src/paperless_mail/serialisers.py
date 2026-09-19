@@ -1,29 +1,36 @@
+from django.utils.translation import gettext as _
+from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
+
+from documents.permissions import get_objects_for_user_owner_aware
+from documents.permissions import has_perms_owner_aware
 from documents.serialisers import CorrespondentField
 from documents.serialisers import DocumentTypeField
+from documents.serialisers import OwnedObjectSerializer
 from documents.serialisers import TagsField
 from paperless_mail.models import MailAccount
 from paperless_mail.models import MailRule
-from rest_framework import serializers
+from paperless_mail.models import ProcessedMail
 
 
-class ObfuscatedPasswordField(serializers.Field):
+class ObfuscatedPasswordField(serializers.CharField):
     """
     Sends *** string instead of password in the clear
     """
 
-    def to_representation(self, value):
-        return "*" * len(value)
+    def to_representation(self, value) -> str:
+        return "*" * max(10, len(value))
 
     def to_internal_value(self, data):
         return data
 
 
-class MailAccountSerializer(serializers.ModelSerializer):
+class MailAccountSerializer(OwnedObjectSerializer):
     password = ObfuscatedPasswordField()
+    imap_port = serializers.IntegerField(required=True, allow_null=False)
 
     class Meta:
         model = MailAccount
-        depth = 1
         fields = [
             "id",
             "name",
@@ -33,26 +40,42 @@ class MailAccountSerializer(serializers.ModelSerializer):
             "username",
             "password",
             "character_set",
+            "is_token",
+            "owner",
+            "user_can_change",
+            "permissions",
+            "set_permissions",
+            "account_type",
+            "expiration",
         ]
 
     def update(self, instance, validated_data):
-        if "password" in validated_data:
-            if len(validated_data.get("password").replace("*", "")) == 0:
-                validated_data.pop("password")
+        if (
+            "password" in validated_data
+            and len(validated_data.get("password").replace("*", "")) == 0
+        ):
+            validated_data.pop("password")
         super().update(instance, validated_data)
         return instance
 
-    def create(self, validated_data):
-        mail_account = MailAccount.objects.create(**validated_data)
-        return mail_account
 
-
-class AccountField(serializers.PrimaryKeyRelatedField):
+class AccountField(serializers.PrimaryKeyRelatedField[MailAccount]):
     def get_queryset(self):
-        return MailAccount.objects.all().order_by("-id")
+        user = getattr(self.context.get("request"), "user", None)
+        if user is None:
+            user = getattr(self.root, "user", None)
+
+        if user is None:
+            return MailAccount.objects.none()
+
+        return get_objects_for_user_owner_aware(
+            user,
+            "change_mailaccount",
+            MailAccount,
+        ).order_by("-id")
 
 
-class MailRuleSerializer(serializers.ModelSerializer):
+class MailRuleSerializer(OwnedObjectSerializer):
     account = AccountField(required=True)
     action_parameter = serializers.CharField(
         allow_null=True,
@@ -66,16 +89,18 @@ class MailRuleSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MailRule
-        depth = 1
         fields = [
             "id",
             "name",
             "account",
+            "enabled",
             "folder",
             "filter_from",
+            "filter_to",
             "filter_subject",
             "filter_body",
-            "filter_attachment_filename",
+            "filter_attachment_filename_include",
+            "filter_attachment_filename_exclude",
             "maximum_age",
             "action",
             "action_parameter",
@@ -84,9 +109,16 @@ class MailRuleSerializer(serializers.ModelSerializer):
             "assign_correspondent_from",
             "assign_correspondent",
             "assign_document_type",
+            "assign_owner_from_rule",
             "order",
             "attachment_type",
             "consumption_scope",
+            "pdf_layout",
+            "owner",
+            "user_can_change",
+            "permissions",
+            "set_permissions",
+            "stop_processing",
         ]
 
     def update(self, instance, validated_data):
@@ -94,18 +126,54 @@ class MailRuleSerializer(serializers.ModelSerializer):
         return instance
 
     def create(self, validated_data):
-        if "assign_tags" in validated_data:
-            assign_tags = validated_data.pop("assign_tags")
-        mail_rule = MailRule.objects.create(**validated_data)
+        assign_tags = validated_data.pop("assign_tags", [])
+        mail_rule = super().create(validated_data)
         if assign_tags:
             mail_rule.assign_tags.set(assign_tags)
         return mail_rule
 
     def validate(self, attrs):
+        action = attrs.get("action")
+        action_parameter = attrs.get("action_parameter")
+
         if (
-            attrs["action"] == MailRule.MailAction.TAG
-            or attrs["action"] == MailRule.MailAction.MOVE
-        ) and attrs["action_parameter"] is None:
+            action in [MailRule.MailAction.TAG, MailRule.MailAction.MOVE]
+            and not action_parameter
+        ):
             raise serializers.ValidationError("An action parameter is required.")
 
         return attrs
+
+    def validate_account(self, account):
+        if self.user is not None and has_perms_owner_aware(
+            self.user,
+            "change_mailaccount",
+            account,
+        ):
+            return account
+
+        raise PermissionDenied(
+            _("Insufficient permissions."),
+        )
+
+    def validate_maximum_age(self, value):
+        if value > 36500:  # ~100 years
+            raise serializers.ValidationError("Maximum mail age is unreasonably large.")
+        return value
+
+
+class ProcessedMailSerializer(OwnedObjectSerializer):
+    class Meta:
+        model = ProcessedMail
+        fields = [
+            "id",
+            "owner",
+            "rule",
+            "folder",
+            "uid",
+            "subject",
+            "received",
+            "processed",
+            "status",
+            "error",
+        ]

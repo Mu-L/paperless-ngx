@@ -1,59 +1,52 @@
-autolabeler:
-  - label: "bug"
-    branch:
-      - '/^fix/'
-    title:
-      - "/^fix/i"
-      - "/^Bugfix/i"
-  - label: "enhancement"
-    branch:
-      - '/^feature/'
-    title:
-      - "/^feature/i"
 categories:
+  - type: 'pre-include'
+    when:
+      - label: 'enhancement'
+      - label: 'bug'
+      - label: 'chore'
+      - label: 'deployment'
+      - label: 'translation'
+      - label: 'dependencies'
+      - label: 'documentation'
+      - label: 'frontend'
+      - label: 'backend'
+      - label: 'ci-cd'
+      - label: 'breaking-change'
+      - label: 'notable'
+  - type: 'pre-exclude'
+    when:
+      - label: 'skip-changelog'
   - title: 'Breaking Changes'
-    labels:
-      - 'breaking-change'
+    when:
+      - label: 'breaking-change'
   - title: 'Notable Changes'
-    labels:
-      - 'notable'
-  - title: 'Features'
-    labels:
-      - 'enhancement'
+    when:
+      - label: 'notable'
+  - title: 'Features / Enhancements'
+    when:
+      - label: 'enhancement'
   - title: 'Bug Fixes'
-    labels:
-      - 'bug'
+    when:
+      - label: 'bug'
   - title: 'Documentation'
-    labels:
-      - 'documentation'
+    when:
+      - label: 'documentation'
   - title: 'Maintenance'
-    labels:
-      - 'chore'
-      - 'deployment'
-      - 'translation'
-      - 'ci-cd'
+    when:
+      - label: 'chore'
+      - label: 'deployment'
+      - label: 'translation'
+      - label: 'ci-cd'
   - title: 'Dependencies'
     collapse-after: 3
-    labels:
-      - 'dependencies'
+    when:
+      - label: 'dependencies'
   - title: 'All App Changes'
-    labels:
-      - 'frontend'
-      - 'backend'
-    collapse-after: 0
-include-labels:
-  - 'enhancement'
-  - 'bug'
-  - 'chore'
-  - 'deployment'
-  - 'translation'
-  - 'dependencies'
-  - 'documentation'
-  - 'frontend'
-  - 'backend'
-  - 'ci-cd'
-  - 'breaking-change'
-  - 'notable'
+    collapse-after: 1
+    when:
+      - label: 'frontend'
+      - label: 'backend'
+filter-by-commitish: true
 category-template: '### $TITLE'
 change-template: '- $TITLE @$AUTHOR ([#$NUMBER]($URL))'
 change-title-escapes: '\<*_&#@'

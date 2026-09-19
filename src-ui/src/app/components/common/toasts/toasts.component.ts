@@ -1,26 +1,40 @@
-import { Component, OnDestroy, OnInit } from '@angular/core'
-import { Subscription } from 'rxjs'
+import { Component, inject } from '@angular/core'
+import { toSignal } from '@angular/core/rxjs-interop'
+import {
+  NgbAccordionModule,
+  NgbProgressbarModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { map, merge, Subject } from 'rxjs'
 import { Toast, ToastService } from 'src/app/services/toast.service'
+import { ToastComponent } from '../toast/toast.component'
 
 @Component({
-  selector: 'app-toasts',
+  selector: 'pngx-toasts',
   templateUrl: './toasts.component.html',
   styleUrls: ['./toasts.component.scss'],
+  imports: [
+    ToastComponent,
+    NgbAccordionModule,
+    NgbProgressbarModule,
+    NgxBootstrapIconsModule,
+  ],
 })
-export class ToastsComponent implements OnInit, OnDestroy {
-  constructor(private toastService: ToastService) {}
+export class ToastsComponent {
+  toastService = inject(ToastService)
 
-  subscription: Subscription
+  private readonly closedToast = new Subject<void>()
 
-  toasts: Toast[] = []
+  readonly toasts = toSignal(
+    merge(
+      this.toastService.showToast.pipe(map((toast) => (toast ? [toast] : []))),
+      this.closedToast.pipe(map(() => [] as Toast[]))
+    ),
+    { initialValue: [] as Toast[] }
+  )
 
-  ngOnDestroy(): void {
-    this.subscription.unsubscribe()
-  }
-
-  ngOnInit(): void {
-    this.subscription = this.toastService
-      .getToasts()
-      .subscribe((toasts) => (this.toasts = toasts))
+  closeToast() {
+    this.toastService.closeToast(this.toasts()[0])
+    this.closedToast.next()
   }
 }
