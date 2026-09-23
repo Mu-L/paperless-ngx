@@ -1,35 +1,56 @@
-import { Component } from '@angular/core'
-import { NgxFileDropEntry } from 'ngx-file-drop'
+import { NgClass, NgTemplateOutlet } from '@angular/common'
+import { Component, QueryList, ViewChildren, inject } from '@angular/core'
+import { RouterModule } from '@angular/router'
 import {
-  ConsumerStatusService,
+  NgbAlert,
+  NgbAlertModule,
+  NgbProgressbarModule,
+} from '@ng-bootstrap/ng-bootstrap'
+import { NgxBootstrapIconsModule } from 'ngx-bootstrap-icons'
+import { TourNgBootstrap } from 'ngx-ui-tour-ng-bootstrap'
+import { ComponentWithPermissions } from 'src/app/components/with-permissions/with-permissions.component'
+import { SETTINGS_KEYS } from 'src/app/data/ui-settings'
+import { IfPermissionsDirective } from 'src/app/directives/if-permissions.directive'
+import { SettingsService } from 'src/app/services/settings.service'
+import { UploadDocumentsService } from 'src/app/services/upload-documents.service'
+import {
   FileStatus,
   FileStatusPhase,
-} from 'src/app/services/consumer-status.service'
-import { UploadDocumentsService } from 'src/app/services/upload-documents.service'
-
-const MAX_ALERTS = 5
+  WebsocketStatusService,
+} from 'src/app/services/websocket-status.service'
+import { WidgetFrameComponent } from '../widget-frame/widget-frame.component'
 
 @Component({
-  selector: 'app-upload-file-widget',
+  selector: 'pngx-upload-file-widget',
   templateUrl: './upload-file-widget.component.html',
   styleUrls: ['./upload-file-widget.component.scss'],
+  imports: [
+    WidgetFrameComponent,
+    IfPermissionsDirective,
+    NgClass,
+    NgTemplateOutlet,
+    RouterModule,
+    NgbAlertModule,
+    NgbProgressbarModule,
+    NgxBootstrapIconsModule,
+    TourNgBootstrap,
+  ],
 })
-export class UploadFileWidgetComponent {
-  alertsExpanded = false
+export class UploadFileWidgetComponent extends ComponentWithPermissions {
+  private websocketStatusService = inject(WebsocketStatusService)
+  private uploadDocumentsService = inject(UploadDocumentsService)
+  settingsService = inject(SettingsService)
 
-  constructor(
-    private consumerStatusService: ConsumerStatusService,
-    private uploadDocumentsService: UploadDocumentsService
-  ) {}
+  @ViewChildren(NgbAlert) alerts: QueryList<NgbAlert>
 
   getStatus() {
-    return this.consumerStatusService.getConsumerStatus().slice(0, MAX_ALERTS)
+    return this.websocketStatusService.getConsumerStatus()
   }
 
   getStatusSummary() {
     let strings = []
     let countUploadingAndProcessing =
-      this.consumerStatusService.getConsumerStatusNotCompleted().length
+      this.websocketStatusService.getConsumerStatusNotCompleted().length
     let countFailed = this.getStatusFailed().length
     let countSuccess = this.getStatusSuccess().length
     if (countUploadingAndProcessing > 0) {
@@ -46,29 +67,26 @@ export class UploadFileWidgetComponent {
     )
   }
 
-  getStatusHidden() {
-    if (this.consumerStatusService.getConsumerStatus().length < MAX_ALERTS)
-      return []
-    else return this.consumerStatusService.getConsumerStatus().slice(MAX_ALERTS)
-  }
-
   getStatusUploading() {
-    return this.consumerStatusService.getConsumerStatus(
+    return this.websocketStatusService.getConsumerStatus(
       FileStatusPhase.UPLOADING
     )
   }
 
   getStatusFailed() {
-    return this.consumerStatusService.getConsumerStatus(FileStatusPhase.FAILED)
+    return this.websocketStatusService.getConsumerStatus(FileStatusPhase.FAILED)
   }
 
   getStatusSuccess() {
-    return this.consumerStatusService.getConsumerStatus(FileStatusPhase.SUCCESS)
+    return this.websocketStatusService.getConsumerStatus(
+      FileStatusPhase.SUCCESS
+    )
   }
 
   getStatusCompleted() {
-    return this.consumerStatusService.getConsumerStatusCompleted()
+    return this.websocketStatusService.getConsumerStatusCompleted()
   }
+
   getTotalUploadProgress() {
     let current = 0
     let max = 0
@@ -90,8 +108,9 @@ export class UploadFileWidgetComponent {
 
   getStatusColor(status: FileStatus) {
     switch (status.phase) {
-      case FileStatusPhase.PROCESSING:
       case FileStatusPhase.UPLOADING:
+      case FileStatusPhase.STARTED:
+      case FileStatusPhase.WORKING:
         return 'primary'
       case FileStatusPhase.FAILED:
         return 'danger'
@@ -101,18 +120,24 @@ export class UploadFileWidgetComponent {
   }
 
   dismiss(status: FileStatus) {
-    this.consumerStatusService.dismiss(status)
+    this.websocketStatusService.dismiss(status)
   }
 
   dismissCompleted() {
-    this.consumerStatusService.dismissCompleted()
+    this.getStatusCompleted().forEach((status) =>
+      this.websocketStatusService.dismiss(status)
+    )
   }
 
-  public fileOver(event) {}
+  public onFileSelected(event: Event) {
+    const files = (event.target as HTMLInputElement).files
+    for (let i = 0; i < files?.length; i++) {
+      const file = files.item(i)
+      file && this.uploadDocumentsService.uploadFile(file)
+    }
+  }
 
-  public fileLeave(event) {}
-
-  public dropped(files: NgxFileDropEntry[]) {
-    this.uploadDocumentsService.uploadFiles(files)
+  get slimSidebarEnabled(): boolean {
+    return this.settingsService.get(SETTINGS_KEYS.SLIM_SIDEBAR)
   }
 }

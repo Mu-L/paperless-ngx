@@ -1,56 +1,103 @@
-import hashlib
-import json
 import os
-import shutil
-import tempfile
-import time
+from itertools import islice
 from pathlib import Path
-from typing import List
-from typing import Set
+from typing import TYPE_CHECKING
+from typing import Any
 
-import tqdm
+from allauth.mfa.models import Authenticator
+from allauth.socialaccount.models import SocialAccount
+from allauth.socialaccount.models import SocialApp
+from allauth.socialaccount.models import SocialToken
 from django.conf import settings
 from django.contrib.auth.models import Group
+from django.contrib.auth.models import Permission
 from django.contrib.auth.models import User
+from django.contrib.contenttypes.models import ContentType
 from django.core import serializers
-from django.core.management.base import BaseCommand
 from django.core.management.base import CommandError
 from django.db import transaction
 from django.utils import timezone
-from documents.models import Comment
+from filelock import FileLock
+from guardian.models import GroupObjectPermission
+from guardian.models import UserObjectPermission
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from django.db.models import QuerySet
+
+if settings.AUDIT_LOG_ENABLED:
+    from auditlog.models import LogEntry
+
+from documents.export.compression import COMPRESSION_CHOICES
+from documents.export.compression import COMPRESSION_METHODS
+from documents.export.compression import ZSTD
+from documents.export.compression import compression_available
+from documents.export.compression import level_error
+from documents.export.sinks import DirectoryExportSink
+from documents.export.sinks import ExportSink
+from documents.export.sinks import StreamingManifestWriter
+from documents.export.sinks import ZipExportSink
+from documents.file_handling import generate_filename
+from documents.management.commands.base import PaperlessCommand
+from documents.management.commands.mixins import CryptMixin
 from documents.models import Correspondent
+from documents.models import CustomField
+from documents.models import CustomFieldInstance
 from documents.models import Document
 from documents.models import DocumentType
+from documents.models import Note
 from documents.models import SavedView
 from documents.models import SavedViewFilterRule
+from documents.models import ShareLink
+from documents.models import ShareLinkBundle
 from documents.models import StoragePath
 from documents.models import Tag
 from documents.models import UiSettings
+from documents.models import Workflow
+from documents.models import WorkflowAction
+from documents.models import WorkflowActionEmail
+from documents.models import WorkflowActionWebhook
+from documents.models import WorkflowTrigger
 from documents.settings import EXPORTER_ARCHIVE_NAME
 from documents.settings import EXPORTER_FILE_NAME
+from documents.settings import EXPORTER_SHARE_LINK_BUNDLE_NAME
 from documents.settings import EXPORTER_THUMBNAIL_NAME
-from filelock import FileLock
+from documents.utils import QuerySetStream
 from paperless import version
-from paperless.db import GnuPG
+from paperless.models import ApplicationConfiguration
 from paperless_mail.models import MailAccount
 from paperless_mail.models import MailRule
 
-from ...file_handling import delete_empty_directories
-from ...file_handling import generate_filename
+
+def serialize_queryset_batched(
+    queryset: "QuerySet[Any]",
+    *,
+    batch_size: int = 500,
+) -> "Generator[list[dict], None, None]":
+    """Yield batches of serialized records from a QuerySet.
+
+    Each batch is a list of dicts in Django's Python serialization format.
+    Uses QuerySet.iterator() to avoid loading the full queryset into memory,
+    and islice to collect chunk-sized batches serialized in a single call.
+    """
+    iterator = queryset.iterator(chunk_size=batch_size)
+    while chunk := list(islice(iterator, batch_size)):
+        yield serializers.serialize("python", chunk)
 
 
-class Command(BaseCommand):
-
-    help = """
-        Decrypt and rename all files in our collection into a given target
-        directory.  And include a manifest file containing document data for
-        easy import.
-    """.replace(
-        "    ",
-        "",
+class Command(CryptMixin, PaperlessCommand):
+    help = (
+        "Decrypt and rename all files in our collection into a given target "
+        "directory.  And include a manifest file containing document data for "
+        "easy import."
     )
 
-    def add_arguments(self, parser):
+    supports_progress_bar = True
+    supports_multiprocessing = False
+
+    def add_arguments(self, parser) -> None:
+        super().add_arguments(parser)
         parser.add_argument("target")
 
         parser.add_argument(
@@ -58,9 +105,23 @@ class Command(BaseCommand):
             "--compare-checksums",
             default=False,
             action="store_true",
-            help="Compare file checksums when determining whether to export "
-            "a file or not. If not specified, file size and time "
-            "modified is used instead.",
+            help=(
+                "Compare file checksums when determining whether to export "
+                "a file or not. If not specified, file size and time "
+                "modified is used instead."
+            ),
+        )
+
+        parser.add_argument(
+            "-cj",
+            "--compare-json",
+            default=False,
+            action="store_true",
+            help=(
+                "Compare json file checksums when determining whether to "
+                "export a json file or not (manifest or metadata). "
+                "If not specified, the file is always exported."
+            ),
         )
 
         parser.add_argument(
@@ -68,9 +129,11 @@ class Command(BaseCommand):
             "--delete",
             default=False,
             action="store_true",
-            help="After exporting, delete files in the export directory that "
-            "do not belong to the current export, such as files from "
-            "deleted documents.",
+            help=(
+                "After exporting, delete files in the export directory that "
+                "do not belong to the current export, such as files from "
+                "deleted documents."
+            ),
         )
 
         parser.add_argument(
@@ -78,8 +141,10 @@ class Command(BaseCommand):
             "--use-filename-format",
             default=False,
             action="store_true",
-            help="Use PAPERLESS_FILENAME_FORMAT for storing files in the "
-            "export directory, if configured.",
+            help=(
+                "Use PAPERLESS_FILENAME_FORMAT for storing files in the "
+                "export directory, if configured."
+            ),
         )
 
         parser.add_argument(
@@ -103,8 +168,10 @@ class Command(BaseCommand):
             "--use-folder-prefix",
             default=False,
             action="store_true",
-            help="Export files in dedicated folders according to their nature: "
-            "archive, originals or thumbnails",
+            help=(
+                "Export files in dedicated folders according to their nature: "
+                "archive, originals or thumbnails"
+            ),
         )
 
         parser.add_argument(
@@ -124,48 +191,79 @@ class Command(BaseCommand):
         )
 
         parser.add_argument(
-            "--no-progress-bar",
-            default=False,
-            action="store_true",
-            help="If set, the progress bar will not be shown",
+            "-zn",
+            "--zip-name",
+            default=f"export-{timezone.localdate().isoformat()}",
+            help="Sets the export zip file name",
         )
 
-    def __init__(self, *args, **kwargs):
-        BaseCommand.__init__(self, *args, **kwargs)
-        self.target: Path = None
-        self.split_manifest = False
-        self.files_in_export_dir: Set[Path] = set()
-        self.exported_files: List[Path] = []
-        self.compare_checksums = False
-        self.use_filename_format = False
-        self.use_folder_prefix = False
-        self.delete = False
-        self.no_archive = False
-        self.no_thumbnail = False
+        parser.add_argument(
+            "--zip-compression",
+            choices=COMPRESSION_CHOICES,
+            default=None,
+            help=(
+                "Compression method for the export zip (requires --zip). "
+                "Default: deflated. 'zstd' requires Python 3.14+ on both the "
+                "exporting and importing machine."
+            ),
+        )
 
-    def handle(self, *args, **options):
+        parser.add_argument(
+            "--zip-compression-level",
+            type=int,
+            default=None,
+            help=(
+                "Compression level for the export zip (requires --zip). "
+                "deflated: 0-9, bzip2: 1-9, zstd: -22..22; ignored for "
+                "stored/lzma."
+            ),
+        )
 
+        parser.add_argument(
+            "--data-only",
+            default=False,
+            action="store_true",
+            help="If set, only the database will be imported, not files",
+        )
+
+        parser.add_argument(
+            "--passphrase",
+            help="If provided, is used to encrypt sensitive data in the export",
+        )
+
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=500,
+            help=(
+                "Number of records to process per batch during serialization. "
+                "Lower values reduce peak memory usage; higher values improve "
+                "throughput. Default: 500."
+            ),
+        )
+
+    def handle(self, *args, **options) -> None:
         self.target = Path(options["target"]).resolve()
-        self.split_manifest = options["split_manifest"]
-        self.compare_checksums = options["compare_checksums"]
-        self.use_filename_format = options["use_filename_format"]
-        self.use_folder_prefix = options["use_folder_prefix"]
-        self.delete = options["delete"]
-        self.no_archive = options["no_archive"]
-        self.no_thumbnail = options["no_thumbnail"]
-        zip_export: bool = options["zip"]
+        self.split_manifest: bool = options["split_manifest"]
+        self.compare_checksums: bool = options["compare_checksums"]
+        self.compare_json: bool = options["compare_json"]
+        self.use_filename_format: bool = options["use_filename_format"]
+        self.use_folder_prefix: bool = options["use_folder_prefix"]
+        self.delete: bool = options["delete"]
+        self.no_archive: bool = options["no_archive"]
+        self.no_thumbnail: bool = options["no_thumbnail"]
+        self.zip_export: bool = options["zip"]
+        self.data_only: bool = options["data_only"]
+        self.passphrase: str | None = options.get("passphrase")
+        self.batch_size: int = options["batch_size"]
 
-        # If zipping, save the original target for later and
-        # get a temporary directory for the target
-        temp_dir = None
-        original_target = None
-        if zip_export:
-            original_target = self.target
-            temp_dir = tempfile.TemporaryDirectory(
-                dir=settings.SCRATCH_DIR,
-                prefix="paperless-export",
+        self.exported_files: set[str] = set()
+
+        if self.zip_export and (self.compare_checksums or self.compare_json):
+            raise CommandError(
+                "--compare-checksums and --compare-json have no effect when "
+                "used with --zip",
             )
-            self.target = Path(temp_dir.name).resolve()
 
         if not self.target.exists():
             raise CommandError("That path doesn't exist")
@@ -176,239 +274,384 @@ class Command(BaseCommand):
         if not os.access(self.target, os.W_OK):
             raise CommandError("That path doesn't appear to be writable")
 
-        try:
-            with FileLock(settings.MEDIA_LOCK):
-                self.dump(options["no_progress_bar"])
+        zip_compression: str | None = options["zip_compression"]
+        zip_compression_level: int | None = options["zip_compression_level"]
 
-                # We've written everything to the temporary directory in this case,
-                # now make an archive in the original target, with all files stored
-                if zip_export:
-                    shutil.make_archive(
-                        os.path.join(
-                            original_target,
-                            f"export-{timezone.localdate().isoformat()}",
-                        ),
-                        format="zip",
-                        root_dir=temp_dir.name,
-                    )
-
-        finally:
-            # Always cleanup the temporary directory, if one was created
-            if zip_export and temp_dir is not None:
-                temp_dir.cleanup()
-
-    def dump(self, progress_bar_disable=False):
-        # 1. Take a snapshot of what files exist in the current export folder
-        for x in self.target.glob("**/*"):
-            if x.is_file():
-                self.files_in_export_dir.add(x.resolve())
-
-        # 2. Create manifest, containing all correspondents, types, tags, storage paths
-        # comments, documents and ui_settings
-        with transaction.atomic():
-            manifest = json.loads(
-                serializers.serialize("json", Correspondent.objects.all()),
-            )
-
-            manifest += json.loads(serializers.serialize("json", Tag.objects.all()))
-
-            manifest += json.loads(
-                serializers.serialize("json", DocumentType.objects.all()),
-            )
-
-            manifest += json.loads(
-                serializers.serialize("json", StoragePath.objects.all()),
-            )
-
-            comments = json.loads(
-                serializers.serialize("json", Comment.objects.all()),
-            )
-            if not self.split_manifest:
-                manifest += comments
-
-            documents = Document.objects.order_by("id")
-            document_map = {d.pk: d for d in documents}
-            document_manifest = json.loads(serializers.serialize("json", documents))
-            if not self.split_manifest:
-                manifest += document_manifest
-
-            manifest += json.loads(
-                serializers.serialize("json", MailAccount.objects.all()),
-            )
-
-            manifest += json.loads(
-                serializers.serialize("json", MailRule.objects.all()),
-            )
-
-            manifest += json.loads(
-                serializers.serialize("json", SavedView.objects.all()),
-            )
-
-            manifest += json.loads(
-                serializers.serialize("json", SavedViewFilterRule.objects.all()),
-            )
-
-            manifest += json.loads(serializers.serialize("json", Group.objects.all()))
-
-            manifest += json.loads(serializers.serialize("json", User.objects.all()))
-
-            manifest += json.loads(
-                serializers.serialize("json", UiSettings.objects.all()),
-            )
-
-        # 3. Export files from each document
-        for index, document_dict in tqdm.tqdm(
-            enumerate(document_manifest),
-            total=len(document_manifest),
-            disable=progress_bar_disable,
+        if not self.zip_export and (
+            zip_compression is not None or zip_compression_level is not None
         ):
-            # 3.1. store files unencrypted
-            document_dict["fields"]["storage_type"] = Document.STORAGE_TYPE_UNENCRYPTED
+            raise CommandError(
+                "--zip-compression and --zip-compression-level require --zip",
+            )
 
-            document = document_map[document_dict["pk"]]
-
-            # 3.2. generate a unique filename
-            filename_counter = 0
-            while True:
-                if self.use_filename_format:
-                    base_name = generate_filename(
-                        document,
-                        counter=filename_counter,
-                        append_gpg=False,
+        compression_method = zip_compression or "deflated"
+        if self.zip_export:
+            if not compression_available(compression_method):
+                if compression_method == "zstd" and ZSTD is None:
+                    raise CommandError(
+                        "zstd compression requires Python 3.14 or newer",
                     )
-                else:
-                    base_name = document.get_public_filename(counter=filename_counter)
-
-                if base_name not in self.exported_files:
-                    self.exported_files.append(base_name)
-                    break
-                else:
-                    filename_counter += 1
-
-            # 3.3. write filenames into manifest
-            original_name = base_name
-            if self.use_folder_prefix:
-                original_name = os.path.join("originals", original_name)
-            original_target = (self.target / Path(original_name)).resolve()
-            document_dict[EXPORTER_FILE_NAME] = original_name
-
-            if not self.no_thumbnail:
-                thumbnail_name = base_name + "-thumbnail.webp"
-                if self.use_folder_prefix:
-                    thumbnail_name = os.path.join("thumbnails", thumbnail_name)
-                thumbnail_target = (self.target / Path(thumbnail_name)).resolve()
-                document_dict[EXPORTER_THUMBNAIL_NAME] = thumbnail_name
-            else:
-                thumbnail_target = None
-
-            if not self.no_archive and document.has_archive_version:
-                archive_name = base_name + "-archive.pdf"
-                if self.use_folder_prefix:
-                    archive_name = os.path.join("archive", archive_name)
-                archive_target = (self.target / Path(archive_name)).resolve()
-                document_dict[EXPORTER_ARCHIVE_NAME] = archive_name
-            else:
-                archive_target = None
-
-            # 3.4. write files to target folder
-            if document.storage_type == Document.STORAGE_TYPE_GPG:
-                t = int(time.mktime(document.created.timetuple()))
-
-                original_target.parent.mkdir(parents=True, exist_ok=True)
-                with document.source_file as out_file:
-                    original_target.write_bytes(GnuPG.decrypted(out_file))
-                    os.utime(original_target, times=(t, t))
-
-                if thumbnail_target:
-                    thumbnail_target.parent.mkdir(parents=True, exist_ok=True)
-                    with document.thumbnail_file as out_file:
-                        thumbnail_target.write_bytes(GnuPG.decrypted(out_file))
-                        os.utime(thumbnail_target, times=(t, t))
-
-                if archive_target:
-                    archive_target.parent.mkdir(parents=True, exist_ok=True)
-                    with document.archive_path as out_file:
-                        archive_target.write_bytes(GnuPG.decrypted(out_file))
-                        os.utime(archive_target, times=(t, t))
-            else:
-                self.check_and_copy(
-                    document.source_path,
-                    document.checksum,
-                    original_target,
+                raise CommandError(
+                    f"Compression method '{compression_method}' is not "
+                    f"available on this Python runtime",
                 )
+            level_msg = level_error(compression_method, zip_compression_level)
+            if level_msg is not None:
+                raise CommandError(level_msg)
 
-                if thumbnail_target:
-                    self.check_and_copy(document.thumbnail_path, None, thumbnail_target)
-
-                if archive_target:
-                    self.check_and_copy(
-                        document.archive_path,
-                        document.archive_checksum,
-                        archive_target,
-                    )
-
-            if self.split_manifest:
-                manifest_name = base_name + "-manifest.json"
-                if self.use_folder_prefix:
-                    manifest_name = os.path.join("json", manifest_name)
-                manifest_name = (self.target / Path(manifest_name)).resolve()
-                manifest_name.parent.mkdir(parents=True, exist_ok=True)
-                content = [document_manifest[index]]
-                content += list(
-                    filter(
-                        lambda d: d["fields"]["document"] == document_dict["pk"],
-                        comments,
-                    ),
-                )
-                manifest_name.write_text(json.dumps(content, indent=2))
-                if manifest_name in self.files_in_export_dir:
-                    self.files_in_export_dir.remove(manifest_name)
-
-        # 4.1 write manifest to target folder
-        manifest_path = (self.target / Path("manifest.json")).resolve()
-        manifest_path.write_text(json.dumps(manifest, indent=2))
-        if manifest_path in self.files_in_export_dir:
-            self.files_in_export_dir.remove(manifest_path)
-
-        # 4.2 write version information to target folder
-        version_path = (self.target / Path("version.json")).resolve()
-        version_path.write_text(
-            json.dumps({"version": version.__full_version_str__}, indent=2),
-        )
-        if version_path in self.files_in_export_dir:
-            self.files_in_export_dir.remove(version_path)
-
-        if self.delete:
-            # 5. Remove files which we did not explicitly export in this run
-
-            for f in self.files_in_export_dir:
-                f.unlink()
-
-                delete_empty_directories(
-                    f.parent,
-                    self.target,
-                )
-
-    def check_and_copy(self, source, source_checksum, target: Path):
-        if target in self.files_in_export_dir:
-            self.files_in_export_dir.remove(target)
-
-        perform_copy = False
-
-        if target.exists():
-            source_stat = os.stat(source)
-            target_stat = target.stat()
-            if self.compare_checksums and source_checksum:
-                target_checksum = hashlib.md5(target.read_bytes()).hexdigest()
-                perform_copy = target_checksum != source_checksum
-            elif source_stat.st_mtime != target_stat.st_mtime:
-                perform_copy = True
-            elif source_stat.st_size != target_stat.st_size:
-                perform_copy = True
+        sink: ExportSink
+        if self.zip_export:
+            sink = ZipExportSink(
+                self.target,
+                options["zip_name"],
+                delete=self.delete,
+                compression=COMPRESSION_METHODS[compression_method],
+                compresslevel=zip_compression_level,
+            )
         else:
-            # Copy if it does not exist
-            perform_copy = True
+            sink = DirectoryExportSink(
+                self.target,
+                compare_checksums=self.compare_checksums,
+                compare_json=self.compare_json,
+                delete=self.delete,
+            )
 
-        if perform_copy:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, target)
+        # Prevent any ongoing changes in the documents while exporting
+        with FileLock(settings.MEDIA_LOCK), sink:
+            self.dump(sink)
+
+    def dump(self, sink: ExportSink) -> None:
+        # 1. Create manifest, containing all correspondents, types, tags, storage
+        #    paths, note, documents and ui_settings
+        _excluded_usernames = ["consumer", "AnonymousUser"]
+        manifest_key_to_object_query: dict[str, QuerySet[Any]] = {
+            "correspondents": Correspondent.objects.all(),
+            "tags": Tag.objects.all(),
+            "document_types": DocumentType.objects.all(),
+            "storage_paths": StoragePath.objects.all(),
+            "mail_accounts": MailAccount.objects.all(),
+            "mail_rules": MailRule.objects.all(),
+            "saved_views": SavedView.objects.all(),
+            "saved_view_filter_rules": SavedViewFilterRule.objects.all(),
+            "groups": Group.objects.all(),
+            "users": User.objects.exclude(
+                username__in=_excluded_usernames,
+            ).all(),
+            "ui_settings": UiSettings.objects.exclude(
+                user__username__in=_excluded_usernames,
+            ),
+            "content_types": ContentType.objects.all(),
+            "permissions": Permission.objects.all(),
+            "user_object_permissions": UserObjectPermission.objects.exclude(
+                user__username__in=_excluded_usernames,
+            ),
+            "group_object_permissions": GroupObjectPermission.objects.all(),
+            "workflow_triggers": WorkflowTrigger.objects.all(),
+            "workflow_actions": WorkflowAction.objects.all(),
+            "workflow_email_actions": WorkflowActionEmail.objects.all(),
+            "workflow_webhook_actions": WorkflowActionWebhook.objects.all(),
+            "workflows": Workflow.objects.all(),
+            "custom_fields": CustomField.objects.all(),
+            "custom_field_instances": CustomFieldInstance.global_objects.all(),
+            "app_configs": ApplicationConfiguration.objects.all(),
+            "notes": Note.global_objects.all(),
+            "documents": Document.global_objects.order_by("id").all(),
+            "share_links": ShareLink.global_objects.all(),
+            "share_link_bundles": ShareLinkBundle.objects.order_by("id").all(),
+            "social_accounts": SocialAccount.objects.exclude(
+                user__username__in=_excluded_usernames,
+            ),
+            "social_apps": SocialApp.objects.all(),
+            "social_tokens": SocialToken.objects.exclude(
+                account__user__username__in=_excluded_usernames,
+            ),
+            "authenticators": Authenticator.objects.exclude(
+                user__username__in=_excluded_usernames,
+            ),
+        }
+
+        if settings.AUDIT_LOG_ENABLED:
+            manifest_key_to_object_query["log_entries"] = LogEntry.objects.all()
+
+        # Crypto setup before streaming begins
+        if self.passphrase:
+            self.setup_crypto(passphrase=self.passphrase)
+        elif MailAccount.objects.count() > 0 or SocialToken.objects.count() > 0:
+            self.stdout.write(
+                self.style.NOTICE(
+                    "No passphrase was given, sensitive fields will be in plaintext",
+                ),
+            )
+
+        document_manifest: list[dict] = []
+        share_link_bundle_manifest: list[dict] = []
+
+        with sink.stream("manifest.json") as handle:
+            writer = StreamingManifestWriter(handle)
+            with transaction.atomic():
+                for key, qs in manifest_key_to_object_query.items():
+                    if key == "documents":
+                        # Accumulate for file-copy loop; written to manifest after
+                        for batch in serialize_queryset_batched(
+                            qs,
+                            batch_size=self.batch_size,
+                        ):
+                            for record in batch:
+                                self._encrypt_record_inline(record)
+                            document_manifest.extend(batch)
+                    elif key == "share_link_bundles":
+                        # Accumulate for file-copy loop; written to manifest after
+                        for batch in serialize_queryset_batched(
+                            qs,
+                            batch_size=self.batch_size,
+                        ):
+                            for record in batch:
+                                self._encrypt_record_inline(record)
+                            share_link_bundle_manifest.extend(batch)
+                    elif self.split_manifest and key in (
+                        "notes",
+                        "custom_field_instances",
+                    ):
+                        # Written per-document in _write_split_manifest
+                        pass
+                    else:
+                        for batch in serialize_queryset_batched(
+                            qs,
+                            batch_size=self.batch_size,
+                        ):
+                            for record in batch:
+                                self._encrypt_record_inline(record)
+                            writer.write_batch(batch)
+
+            share_link_bundle_map: dict[int, ShareLinkBundle] = {
+                b.pk: b
+                for b in ShareLinkBundle.objects.order_by("id").prefetch_related(
+                    "documents",
+                )
+            }
+
+            # 2. Export files from each document
+            # document_manifest and this stream are both ordered by id from the
+            # same underlying rows, so zip them in lockstep instead of building
+            # a dict of every Document instance up front (QuerySetStream keeps
+            # only one batch of documents resident at a time).
+            documents_stream = QuerySetStream(
+                Document.global_objects.order_by("id"),
+                chunk_size=self.batch_size,
+            )
+            for document_dict, document in self.track(
+                zip(document_manifest, documents_stream, strict=True),
+                description="Exporting documents...",
+                total=len(document_manifest),
+            ):
+                # Both document_manifest and documents_stream come from the same
+                # Document.global_objects.order_by("id") query, taken while
+                # MEDIA_LOCK is held, so this should be unreachable -- it guards
+                # against silent data corruption if that invariant ever breaks.
+                if document.pk != document_dict["pk"]:  # pragma: no cover
+                    raise CommandError(
+                        "Document export ordering mismatch: expected "
+                        f"pk={document_dict['pk']}, got pk={document.pk}. "
+                        "Documents may have changed during export.",
+                    )
+
+                # generate a unique filename, then the arcnames for its files
+                base_name = self.generate_base_name(document)
+                original_arc, thumbnail_arc, archive_arc = (
+                    self.generate_document_targets(document, base_name, document_dict)
+                )
+
+                if not self.data_only:
+                    self.copy_document_files(
+                        document,
+                        sink,
+                        original_arc,
+                        thumbnail_arc,
+                        archive_arc,
+                    )
+
+                if self.split_manifest:
+                    self._write_split_manifest(sink, document_dict, document, base_name)
+                else:
+                    writer.write_record(document_dict)
+
+            for bundle_dict in share_link_bundle_manifest:
+                bundle = share_link_bundle_map[bundle_dict["pk"]]
+                bundle_arc = self.generate_share_link_bundle_target(
+                    bundle,
+                    bundle_dict,
+                )
+                if not self.data_only and bundle_arc is not None:
+                    self.copy_share_link_bundle_file(bundle, sink, bundle_arc)
+                writer.write_record(bundle_dict)
+
+            writer.close()
+
+        # 3. Write version (and crypto params) to metadata.json
+        # Django stores most crypto values in the field itself; we store
+        # them once here for the whole export
+        metadata: dict[str, str | int | dict[str, str | int]] = {
+            "version": version.__full_version_str__,
+        }
+        if self.passphrase:
+            metadata.update(self.get_crypt_params())
+        sink.add_json(metadata, "metadata.json")
+
+    def generate_base_name(self, document: Document) -> Path:
+        """
+        Generates a unique name for the document, one which hasn't already been exported (or will be)
+        """
+        filename_counter = 0
+        while True:
+            if self.use_filename_format:
+                base_name = generate_filename(
+                    document,
+                    counter=filename_counter,
+                )
+            else:
+                base_name = document.get_public_filename(counter=filename_counter)
+
+            if base_name not in self.exported_files:
+                self.exported_files.add(base_name)
+                break
+            else:
+                filename_counter += 1
+        return Path(base_name)
+
+    def generate_document_targets(
+        self,
+        document: Document,
+        base_name: Path,
+        document_dict: dict,
+    ) -> tuple[str, str | None, str | None]:
+        """
+        Generates the relative POSIX arcnames for a document's original, thumbnail
+        and archive files (depending on settings), and records them in the manifest.
+        """
+        original_name = base_name
+        if self.use_folder_prefix:
+            original_name = Path("originals") / original_name
+        original_arc = original_name.as_posix()
+        document_dict[EXPORTER_FILE_NAME] = original_arc
+
+        if not self.no_thumbnail:
+            thumbnail_name = base_name.parent / (base_name.stem + "-thumbnail.webp")
+            if self.use_folder_prefix:
+                thumbnail_name = Path("thumbnails") / thumbnail_name
+            thumbnail_arc = thumbnail_name.as_posix()
+            document_dict[EXPORTER_THUMBNAIL_NAME] = thumbnail_arc
+        else:
+            thumbnail_arc = None
+
+        if not self.no_archive and document.has_archive_version:
+            archive_name = base_name.parent / (base_name.stem + "-archive.pdf")
+            if self.use_folder_prefix:
+                archive_name = Path("archive") / archive_name
+            archive_arc = archive_name.as_posix()
+            document_dict[EXPORTER_ARCHIVE_NAME] = archive_arc
+        else:
+            archive_arc = None
+
+        return original_arc, thumbnail_arc, archive_arc
+
+    def copy_document_files(
+        self,
+        document: Document,
+        sink: ExportSink,
+        original_arc: str,
+        thumbnail_arc: str | None,
+        archive_arc: str | None,
+    ) -> None:
+        """
+        Hands the document's files to the sink (original, thumbnail, archive).
+        """
+        sink.add_file(document.source_path, original_arc, checksum=document.checksum)
+
+        if thumbnail_arc:
+            sink.add_file(document.thumbnail_path, thumbnail_arc)
+
+        if archive_arc:
+            if TYPE_CHECKING:
+                assert isinstance(document.archive_path, Path)
+            sink.add_file(
+                document.archive_path,
+                archive_arc,
+                checksum=document.archive_checksum,
+            )
+
+    def generate_share_link_bundle_target(
+        self,
+        bundle: ShareLinkBundle,
+        bundle_dict: dict,
+    ) -> str | None:
+        """
+        Generates the relative POSIX arcname for a share link bundle file, if any.
+        """
+        if not bundle.file_path:
+            return None
+
+        stored_bundle_path = Path(bundle.file_path)
+        portable_bundle_path = (
+            stored_bundle_path
+            if not stored_bundle_path.is_absolute()
+            else Path(stored_bundle_path.name)
+        )
+        export_bundle_path = Path("share_link_bundles") / portable_bundle_path
+
+        bundle_dict["fields"]["file_path"] = portable_bundle_path.as_posix()
+        bundle_dict[EXPORTER_SHARE_LINK_BUNDLE_NAME] = export_bundle_path.as_posix()
+
+        return export_bundle_path.as_posix()
+
+    def copy_share_link_bundle_file(
+        self,
+        bundle: ShareLinkBundle,
+        sink: ExportSink,
+        bundle_arc: str,
+    ) -> None:
+        """
+        Hands a share link bundle ZIP to the sink.
+        """
+        bundle_source_path = bundle.absolute_file_path
+        if bundle_source_path is None:
+            raise FileNotFoundError(f"Share link bundle {bundle.pk} has no file path")
+
+        sink.add_file(bundle_source_path, bundle_arc)
+
+    def _encrypt_record_inline(self, record: dict) -> None:
+        """Encrypt sensitive fields in a single record, if passphrase is set."""
+        if not self.passphrase:
+            return
+        fields = self.CRYPT_FIELDS_BY_MODEL.get(record.get("model", ""))
+        if fields:
+            for field in fields:
+                if record["fields"].get(field):
+                    record["fields"][field] = self.encrypt_string(
+                        value=record["fields"][field],
+                    )
+
+    def _write_split_manifest(
+        self,
+        sink: ExportSink,
+        document_dict: dict,
+        document: Document,
+        base_name: Path,
+    ) -> None:
+        """Write per-document manifest file for --split-manifest mode."""
+        content = [document_dict]
+        content.extend(
+            serializers.serialize(
+                "python",
+                Note.global_objects.filter(document=document),
+            ),
+        )
+        content.extend(
+            serializers.serialize(
+                "python",
+                CustomFieldInstance.global_objects.filter(document=document),
+            ),
+        )
+        manifest_name = base_name.with_name(f"{base_name.stem}-manifest.json")
+        if self.use_folder_prefix:
+            manifest_name = Path("json") / manifest_name
+        sink.add_json(content, manifest_name.as_posix())

@@ -1,6 +1,6 @@
 import { HttpClient } from '@angular/common/http'
-import { Injectable } from '@angular/core'
-import { map, Observable } from 'rxjs'
+import { Injectable, inject } from '@angular/core'
+import { Observable } from 'rxjs'
 import { environment } from 'src/environments/environment'
 
 export interface AppRemoteVersion {
@@ -12,7 +12,7 @@ export interface AppRemoteVersion {
   providedIn: 'root',
 })
 export class RemoteVersionService {
-  constructor(private http: HttpClient) {}
+  private http = inject(HttpClient)
 
   public checkForUpdates(): Observable<AppRemoteVersion> {
     return this.http.get<AppRemoteVersion>(

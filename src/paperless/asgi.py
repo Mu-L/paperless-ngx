@@ -10,7 +10,8 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "paperless.settings")
 django_asgi_app = get_asgi_application()
 
 from channels.auth import AuthMiddlewareStack  # noqa: E402
-from channels.routing import ProtocolTypeRouter, URLRouter  # noqa: E402
+from channels.routing import ProtocolTypeRouter  # noqa: E402
+from channels.routing import URLRouter  # noqa: E402
 
 from paperless.urls import websocket_urlpatterns  # noqa: E402
 
@@ -20,3 +21,10 @@ application = ProtocolTypeRouter(
         "websocket": AuthMiddlewareStack(URLRouter(websocket_urlpatterns)),
     },
 )
+
+import logging  # noqa: E402
+
+from paperless.version import __full_version_str__  # noqa: E402
+
+logger = logging.getLogger("paperless.asgi")
+logger.info(f"[init] Paperless-ngx version: v{__full_version_str__}")

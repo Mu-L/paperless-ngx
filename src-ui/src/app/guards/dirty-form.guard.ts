@@ -1,14 +1,12 @@
-import { Injectable } from '@angular/core'
+import { Injectable, inject } from '@angular/core'
+import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { DirtyCheckGuard } from '@ngneat/dirty-check-forms'
 import { Observable, Subject } from 'rxjs'
-import { NgbModal } from '@ng-bootstrap/ng-bootstrap'
 import { ConfirmDialogComponent } from 'src/app/components/common/confirm-dialog/confirm-dialog.component'
 
 @Injectable({ providedIn: 'root' })
 export class DirtyFormGuard extends DirtyCheckGuard {
-  constructor(private modalService: NgbModal) {
-    super()
-  }
+  private modalService = inject(NgbModal)
 
   confirmChanges(): Observable<boolean> {
     let modal = this.modalService.open(ConfirmDialogComponent, {
@@ -20,7 +18,7 @@ export class DirtyFormGuard extends DirtyCheckGuard {
     modal.componentInstance.btnClass = 'btn-warning'
     modal.componentInstance.btnCaption = $localize`Leave page`
     modal.componentInstance.confirmClicked.subscribe(() => {
-      modal.componentInstance.buttonsEnabled = false
+      modal.componentInstance.buttonsEnabled.set(false)
       modal.close()
     })
     const subject = new Subject<boolean>()
